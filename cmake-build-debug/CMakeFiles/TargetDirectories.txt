@@ -1,3 +1,0 @@
-/home/brandon/CLionProjects/Proyecto1_SO/cmake-build-debug/CMakeFiles/Proyecto1_SO.dir
-/home/brandon/CLionProjects/Proyecto1_SO/cmake-build-debug/CMakeFiles/edit_cache.dir
-/home/brandon/CLionProjects/Proyecto1_SO/cmake-build-debug/CMakeFiles/rebuild_cache.dir
