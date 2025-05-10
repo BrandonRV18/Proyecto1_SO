@@ -1,24 +1,31 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <ucontext.h>
 #include <stdlib.h>
-#include <stdio.h>
-
+#include "my_pthread.h"
 #define STACK_SIZE (64 * 1024)
 
 extern ucontext_t scheduler_ctx;
-extern void encolar_hilo(struct Scheduler *sched, struct TCB *t);
-extern int next_tid;
-void thread_trampoline(void (*funcion)(void*), void *arg);
+extern ThreadPool   global_thread_pool;
+extern TCB         *hilo_actual;
+extern int          next_tid;
+
+
+static void thread_trampoline(void (*funcion)(void*), void *arg) {
+    funcion(arg);
+    my_thread_end();
+}
 
 int my_thread_create(
     void (*funcion)(void*),
     void *arg,
-    struct Scheduler *sched,
+    Scheduler *sched,
     int tickets,
     int priority,
     long deadline
 ) {
-    struct TCB *hilo = malloc(sizeof(*t));
-    if (hilo == NULL) return -1;
+    TCB *hilo = malloc(sizeof *hilo);
+    if (!hilo) return -1;
 
     if (getcontext(&hilo->context) == -1) {
         free(hilo);
@@ -26,68 +33,73 @@ int my_thread_create(
     }
 
     hilo->stack = malloc(STACK_SIZE);
-    if (hilo->stack==NULL) {
+    if (!hilo->stack) {
         free(hilo);
         return -1;
     }
-    hilo->context.uc_stack.ss_sp= hilo->stack;
+    hilo->context.uc_stack.ss_sp   = hilo->stack;
     hilo->context.uc_stack.ss_size = STACK_SIZE;
-
-    hilo->context.uc_link = &scheduler_ctx;
+    hilo->context.uc_link          = &scheduler_ctx;
 
     makecontext(&hilo->context,
                 (void(*)(void))thread_trampoline,
                 2, funcion, arg);
 
     hilo->tid       = next_tid++;
-    hilo->estado     = READY;
+    hilo->state     = READY;
     hilo->scheduler = sched;
     hilo->next      = NULL;
     hilo->tickets   = tickets;
     hilo->priority  = priority;
     hilo->deadline  = deadline;
+    hilo->joiner    = NULL;
+    hilo->detached  = 0;
 
+    registrar_hilo(&global_thread_pool, hilo);
     encolar_hilo(sched, hilo);
-
     return hilo->tid;
 }
 
-extern TCB *hilo_actual;
-extern void schedule(void);
-
 void my_thread_end(void) {
     TCB *self = hilo_actual;
-    self->estado = TERMINATED;
+    self->state = TERMINATED;
+
+    if (self->joiner) {
+        self->joiner->state = READY;
+        encolar_hilo(self->scheduler, self->joiner);
+    }
     free(self->stack);
-    self->stack = NULL;
+
+    if (self->detached || self->joiner == NULL) {
+        free(self);
+        schedule();
+        abort();
+    }
+
     schedule();
     abort();
 }
 
 void my_thread_yield(void) {
     TCB *self = hilo_actual;
-    self->estado = READY;
+    self->state = READY;
     encolar_hilo(self->scheduler, self);
     schedule();
 }
 
-extern TCB *buscar_hilo_id(int tid);
-
 void my_thread_join(int tid) {
-    TCB *self   = hilo_actual;
-    TCB *hilo_encontrado = buscar_hilo_id(tid);
-
-    if (hilo_encontrado == NULL || hilo_encontrado->estado == TERMINATED) {
-        return;
-    }
-
-    if (hilo_encontrado == self) {
-        return;
-    }
-
-    self->estado        = BLOCKED;
-    hilo_encontrado->joiner = self;
-
+    TCB *self = hilo_actual;
+    TCB *h = buscar_hilo_id(&global_thread_pool, tid);
+    if (!h || h->state == TERMINATED || h == self) return;
+    self->state   = BLOCKED;
+    h->joiner     = self;
     schedule();
+}
+
+int my_thread_detach(int tid) {
+    TCB *h = buscar_hilo_id(&global_thread_pool, tid);
+    if (!h) return -1;
+    h->detached = 1;
+    return 0;
 }
 
