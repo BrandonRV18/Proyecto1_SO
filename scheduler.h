@@ -70,7 +70,6 @@ TCB   *buscar_hilo_id(ThreadPool *p, int tid);
 void   encolar_hilo(Scheduler *sched, TCB *t);
 void   schedule(void);
 
-
 void   rr_scheduler_init(RR_Scheduler *rr, int quantum_ms);
 void   lottery_scheduler_init(Lottery_Scheduler *ls);
 

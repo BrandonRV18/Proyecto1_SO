@@ -14,5 +14,22 @@ void  my_thread_yield(void);
 void  my_thread_join(int tid);
 int   my_thread_detach(int tid);
 
+typedef struct my_mutex {
+    int bloqueado;
+    TCB *propietario;
+    TCB *head;
+    TCB *tail;
+} my_mutex;
+
+/* -------------------------------------------------------------
+   Prototipos de la API de mutex
+------------------------------------------------------------- */
+int my_mutex_init(my_mutex *m);
+int my_mutex_destroy(my_mutex *m);
+int my_mutex_lock(my_mutex *m);
+int my_mutex_trylock(my_mutex *m);
+int my_mutex_unlock(my_mutex *m);
+
+
 
 #endif
