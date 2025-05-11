@@ -24,6 +24,7 @@ typedef struct EDF_Scheduler EDF_Scheduler;
 struct Scheduler {
     void   (*encolar_hilo)(Scheduler *self, TCB *t);
     TCB   *(*siguiente_hilo)(Scheduler *self);
+    void   (*remover_hilo)   (Scheduler *self, TCB *t);
 };
 
 
@@ -73,6 +74,7 @@ extern ucontext_t   scheduler_ctx;
 
 
 int    registrar_hilo(ThreadPool *p, TCB *t);
+int    my_thread_chsched(TCB *t, Scheduler *new_sch);
 TCB   *buscar_hilo_id(ThreadPool *p, int tid);
 void   encolar_hilo(Scheduler *sched, TCB *t);
 void   schedule(void);

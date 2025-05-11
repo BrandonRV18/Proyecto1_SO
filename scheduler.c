@@ -45,6 +45,32 @@ void encolar_hilo(Scheduler *sched, TCB *hilo) {
     sched->encolar_hilo(sched, hilo);
 }
 
+//Cambia dinámicamente la política de scheduling de un hilo
+int my_thread_chsched(TCB *hilo, Scheduler *new_sch) {
+    //Obtiene el scheduler actual al que está asignado el hilo
+    Scheduler *old_sch = hilo->scheduler;
+
+    //Si ya tenía un scheduler, lo saca de su lista de listos
+    if (old_sch)
+        old_sch->remover_hilo(old_sch, hilo);
+
+    //Asigna el nuevo scheduler al hilo
+    hilo->scheduler = new_sch;
+
+    //Marca el hilo como READY para que pueda ser seleccionado
+    hilo->state     = READY;
+
+    //Limpia cualquier enlace previo en la lista antigua
+    hilo->next      = NULL;
+
+    //Encola el hilo en la nueva política de scheduling
+    new_sch->encolar_hilo(new_sch, hilo);
+
+    return 0;
+}
+
+
+
 
 void schedule(void) {
     if (hilo_actual == NULL) return;
@@ -115,9 +141,36 @@ static TCB *rr_siguiente_hilo(Scheduler *sched) {
     return chosen;
 }
 
+// Quita t de la cola FIFO de RR
+static void rr_remover_hilo(Scheduler *sched, TCB *hilo) {
+    RR_Scheduler *rr = (RR_Scheduler*)sched;
+    TCB *prev = NULL;
+    TCB *it = rr->head;
+    // Busca t en la lista
+    while (it && it != hilo) {
+        prev = it;
+        it   = it->next;
+    }
+    if (!it) {
+        return;
+    }
+    // Desenlaza
+    if (prev) {
+        prev->next = it->next;
+    }
+    else {
+        rr->head = it->next;
+    }
+    if (rr->tail == it) {
+        rr->tail = prev;
+    }
+    it->next = NULL;
+}
+
 void rr_scheduler_init(RR_Scheduler *rr, int quantum_ms) {
     rr->base.encolar_hilo   = rr_encolar_hilo;
     rr->base.siguiente_hilo = rr_siguiente_hilo;
+    rr->base.remover_hilo    = rr_remover_hilo;
     rr->quantum             = quantum_ms;
     rr->head = rr->tail     = NULL;
     start_preemption(quantum_ms);
@@ -183,10 +236,34 @@ static TCB *lottery_siguiente_hilo(Scheduler *sched) {
     }
     return NULL;
 }
+
+// Quita t de la lista enlazada de LOTTERY
+static void lottery_remover_hilo(Scheduler *sched, TCB *hilo) {
+    Lottery_Scheduler *ls = (Lottery_Scheduler*)sched;
+    TCB *prev = NULL;
+    TCB *it = ls->head;
+    while (it && it != hilo) {
+        prev = it;
+        it   = it->next;
+    }
+    if (!it) {
+        return;
+    }
+    if (prev) {
+        prev->next = it->next;
+    }
+    else {
+        ls->head  = it->next;
+    }
+    it->next = NULL;
+}
+
+
 // Inicializa el scheduler de lotería (sin preempción periódica)
 void lottery_scheduler_init(Lottery_Scheduler *ls) {
     ls->base.encolar_hilo   = lottery_encolar_hilo;
     ls->base.siguiente_hilo = lottery_siguiente_hilo;
+    ls->base.remover_hilo    = lottery_remover_hilo;
     ls->head                = NULL;
     srand((unsigned)time(NULL));
 }
@@ -196,9 +273,7 @@ void lottery_scheduler_init(Lottery_Scheduler *ls) {
 //--------------------------------------------------------------
 //Real Time Scheduler con EDF
 //--------------------------------------------------------------
-/* ------------------------------------------------------------------ */
-/* Inserta un hilo en READY y preempta si su deadline es más temprano */
-/* ------------------------------------------------------------------ */
+
 /* ------------------------------------------------------------------ */
 /* Selecciona el READY con deadline más cercano*/
 /* ------------------------------------------------------------------ */
@@ -227,7 +302,9 @@ static TCB *edf_siguiente_hilo(Scheduler *sched) {
     /* Devuelve el TCB seleccionado */
     return mejor;
 }
-
+/* ------------------------------------------------------------------ */
+/* Inserta un hilo en READY y prregunta si su deadline es más temprano */
+/* ------------------------------------------------------------------ */
 static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
     /* Down-cast al tipo concreto */
     EDF_Scheduler *edf_scheduler = (EDF_Scheduler*)sched;
@@ -269,14 +346,33 @@ static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
 }
 
 
+// Idéntico a lottery_remove_hilo, pues usa lista enlazada
+static void edf_remover_hilo(Scheduler *sched, TCB *hilo) {
+    EDF_Scheduler *edf_scheduler = (EDF_Scheduler*)sched;
+    TCB *prev = NULL;
+    TCB *it = edf_scheduler->head;
+    while (it && it != hilo) {
+        prev = it;
+        it   = it->next;
+    }
+    if (!it) {
+        return;
+    }
+    if (prev) {
+        prev->next = it->next;
+    }
+    else {
+        edf_scheduler->head  = it->next;
+    }
+    it->next = NULL;
+}
 
-/* Inicializa el EDF Scheduler (cooperativo + preempción al encolar) */
+
+
 void edf_scheduler_init(EDF_Scheduler *edf_scheduler) {
-    /* Asocia la función de encolar */
     edf_scheduler->base.encolar_hilo   = edf_encolar_hilo;
-    /* Asocia la función de seleccionar siguiente hilo */
     edf_scheduler->base.siguiente_hilo = edf_siguiente_hilo;
-    /* Lista de listos comienza vacía */
+    edf_scheduler->base.remover_hilo    = edf_remover_hilo;
     edf_scheduler->head                = NULL;
 }
 
