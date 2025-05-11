@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 
+
 typedef enum {
     READY,
     RUNNING,
@@ -17,6 +18,7 @@ typedef struct Scheduler    Scheduler;
 typedef struct TCB          TCB;
 typedef struct RR_Scheduler RR_Scheduler;
 typedef struct Lottery_Scheduler Lottery_Scheduler;
+typedef struct EDF_Scheduler EDF_Scheduler;
 
 
 struct Scheduler {
@@ -51,6 +53,11 @@ struct Lottery_Scheduler {
     TCB      *head;
 };
 
+struct EDF_Scheduler {
+    Scheduler base;
+    TCB      *head;
+};
+
 typedef struct {
     size_t created_threads_counter;
     TCB   **threads;
@@ -72,5 +79,6 @@ void   schedule(void);
 
 void   rr_scheduler_init(RR_Scheduler *rr, int quantum_ms);
 void   lottery_scheduler_init(Lottery_Scheduler *ls);
+void   edf_scheduler_init(EDF_Scheduler *es);
 
 #endif

@@ -17,32 +17,32 @@ int          next_tid           = 0;
 ucontext_t   scheduler_ctx;
 
 
-static void ensure_capacity(ThreadPool *p) {
-    if (p->count + 1 > p->capacity) {
-        size_t new_cap = (p->capacity == 0 ? 4 : p->capacity * 2);
-        p->threads = realloc(p->threads, new_cap * sizeof(TCB *));
-        p->capacity = new_cap;
+static void ensure_capacity(ThreadPool *pool) {
+    if (pool->count + 1 > pool->capacity) {
+        size_t new_cap = (pool->capacity == 0 ? 4 : pool->capacity * 2);
+        pool->threads = realloc(pool->threads, new_cap * sizeof(TCB *));
+        pool->capacity = new_cap;
     }
 }
 
-int registrar_hilo(ThreadPool *p, TCB *t) {
-    ensure_capacity(p);
-    p->threads[p->count++] = t;
-    return t->tid;
+int registrar_hilo(ThreadPool *pool, TCB *hilo) {
+    ensure_capacity(pool);
+    pool->threads[pool->count++] = hilo;
+    return hilo->tid;
 }
 
-TCB *buscar_hilo_id(ThreadPool *p, int tid) {
-    for (size_t i = 0; i < p->count; i++) {
-        if (p->threads[i]->tid == tid) {
-            return p->threads[i];
+TCB *buscar_hilo_id(ThreadPool *pool, int tid) {
+    for (size_t i = 0; i < pool->count; i++) {
+        if (pool->threads[i]->tid == tid) {
+            return pool->threads[i];
         }
     }
     return NULL;
 }
 
 
-void encolar_hilo(Scheduler *sched, TCB *t) {
-    sched->encolar_hilo(sched, t);
+void encolar_hilo(Scheduler *sched, TCB *hilo) {
+    sched->encolar_hilo(sched, hilo);
 }
 
 
@@ -79,22 +79,22 @@ static void start_preemption(int quantum_ms) {
 }
 
 
-static void rr_encolar_hilo(Scheduler *s, TCB *t) {
-    RR_Scheduler *rr = (RR_Scheduler*)s;
-    t->scheduler     = s;
-    t->state         = READY;
-    t->next          = NULL;
+static void rr_encolar_hilo(Scheduler *sched, TCB *hilo) {
+    RR_Scheduler *rr = (RR_Scheduler*)sched;
+    hilo->scheduler     = sched;
+    hilo->state         = READY;
+    hilo->next          = NULL;
     if (rr->tail == NULL) {
-        rr->head = t;
+        rr->head = hilo;
     }
     else {
-        rr->tail->next = t;
+        rr->tail->next = hilo;
     }
-    rr->tail = t;
+    rr->tail = hilo;
 }
 
-static TCB *rr_siguiente_hilo(Scheduler *s) {
-    RR_Scheduler *rr = (RR_Scheduler*)s;
+static TCB *rr_siguiente_hilo(Scheduler *sched) {
+    RR_Scheduler *rr = (RR_Scheduler*)sched;
     if (rr->head == NULL) {
         return NULL;
     }
@@ -146,24 +146,24 @@ void thread_func(int id) {
 //--------------------------------------------------------------
 
 // Inserta un hilo al final de la lista READY
-static void lottery_encolar_hilo(Scheduler *s, TCB *t) {
-    Lottery_Scheduler *ls = (Lottery_Scheduler*)s;
-    t->scheduler = s;
-    t->state     = READY;
-    t->next      = NULL;
+static void lottery_encolar_hilo(Scheduler *sched, TCB *hilo) {
+    Lottery_Scheduler *ls = (Lottery_Scheduler*)sched;
+    hilo->scheduler = sched;
+    hilo->state     = READY;
+    hilo->next      = NULL;
     if (ls->head == NULL) {
-        ls->head = t;
+        ls->head = hilo;
     } else {
         TCB *it = ls->head;
         while (it->next) it = it->next;
-        it->next = t;
+        it->next = hilo;
     }
 }
 
 
 // Selecciona el siguiente hilo por sorteo de tickets
-static TCB *lottery_siguiente_hilo(Scheduler *s) {
-    Lottery_Scheduler *ls = (Lottery_Scheduler*)s;
+static TCB *lottery_siguiente_hilo(Scheduler *sched) {
+    Lottery_Scheduler *ls = (Lottery_Scheduler*)sched;
     int total = 0;
     for (TCB *it = ls->head; it; it = it->next) {
         if (it->state == READY)
@@ -192,6 +192,124 @@ void lottery_scheduler_init(Lottery_Scheduler *ls) {
 }
 
 
+
+//--------------------------------------------------------------
+//Real Time Scheduler con EDF
+//--------------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Inserta un hilo en READY y preempta si su deadline es más temprano */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Selecciona el READY con deadline más cercano*/
+/* ------------------------------------------------------------------ */
+static TCB *edf_siguiente_hilo(Scheduler *sched) {
+    /* Down-cast al tipo concreto */
+    EDF_Scheduler *edf_scheduler = (EDF_Scheduler*)sched;
+    /* Puntero al mejor candidato */
+    TCB *mejor = NULL;
+
+    /* Recorre todos los hilos listos */
+    for (TCB *it = edf_scheduler->head; it; it = it->next) {
+        /* Solo considera los que están READY */
+        if (it->state != READY)
+            continue;
+        /* Actualiza si es el primero o tiene deadline más temprano */
+        if (!mejor || it->deadline < mejor->deadline)
+            mejor = it;
+    }
+
+    /* Si no encontró ninguno, devuelve NULL */
+    if (!mejor)
+        return NULL;
+
+    /* Marca el ganador como en ejecución */
+    mejor->state = RUNNING;
+    /* Devuelve el TCB seleccionado */
+    return mejor;
+}
+
+static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
+    /* Down-cast al tipo concreto */
+    EDF_Scheduler *edf_scheduler = (EDF_Scheduler*)sched;
+    /* Asocia este scheduler al hilo */
+    hilo->scheduler = sched;
+    /* Marca el hilo como listo */
+    hilo->state     = READY;
+    /* Rompe enlaces previos */
+    hilo->next      = NULL;
+
+    /* Inserta al final de la lista enlazada */
+    if (!edf_scheduler->head) {
+        edf_scheduler->head = hilo;
+    } else {
+        TCB *it = edf_scheduler->head;
+        while (it->next)
+            it = it->next;
+        it->next = hilo;
+    }
+
+    /* Si hay un hilo en ejecución y este nuevo tiene
+       deadline más temprano, preempta inmediatamente */
+    if (hilo_actual && (hilo->deadline < hilo_actual->deadline)) {
+        /* Cede el control al scheduler */
+        TCB *prev = hilo_actual;
+
+        // no re-encolamos otra vez al current, ya está en la lista
+        // marcamos al current como listo
+        prev->state = READY;
+
+        // seleccionamos al más urgente
+        TCB *next = edf_siguiente_hilo(sched);
+        if (next && next != prev) {
+            next->state = RUNNING;
+            hilo_actual = next;
+            swapcontext(&prev->context, &next->context);
+        }
+    }
+}
+
+
+
+/* Inicializa el EDF Scheduler (cooperativo + preempción al encolar) */
+void edf_scheduler_init(EDF_Scheduler *edf_scheduler) {
+    /* Asocia la función de encolar */
+    edf_scheduler->base.encolar_hilo   = edf_encolar_hilo;
+    /* Asocia la función de seleccionar siguiente hilo */
+    edf_scheduler->base.siguiente_hilo = edf_siguiente_hilo;
+    /* Lista de listos comienza vacía */
+    edf_scheduler->head                = NULL;
+}
+
+static TCB hilo_nuevo;
+static EDF_Scheduler *ES;
+/* Función de cada hilo: imprime iteraciones, y uno crea el nuevo hilo */
+static void thread_func_edf(int id) {
+    for (int i = 0; i < 5; i++) {
+        printf("Hilo %d, iteración %d\n", id, i);
+        /* Simular carga */
+        for (volatile int j = 0; j < 50000000; j++);
+        /* En el hilo 1, en la iteración 2, nace un hilo 4 más urgente */
+        if (id == 1 && i == 2) {
+            /* Configurar el TCB estático */
+            getcontext(&hilo_nuevo.context);
+            hilo_nuevo.stack = malloc(64*1024);
+            hilo_nuevo.context.uc_stack.ss_sp   = hilo_nuevo.stack;
+            hilo_nuevo.context.uc_stack.ss_size = 64*1024;
+            hilo_nuevo.context.uc_link          = NULL;
+            makecontext(&hilo_nuevo.context, (void(*)(void))thread_func, 1, 4);
+            hilo_nuevo.tid      = 4;
+            hilo_nuevo.deadline = 50;  /* Muy urgente: 50ms */
+            hilo_nuevo.next     = NULL;
+            /* Encolar en EDF y preemptar al vuelo */
+            ES->base.encolar_hilo((Scheduler*)ES, &hilo_nuevo);
+        }
+    }
+    /* Al terminar, liberar pila y ceder */
+    int id_local = hilo_actual->tid;
+    free(hilo_actual->stack);
+    hilo_actual->state = TERMINATED;
+    schedule();
+}
 
 // -------------------------------------------------------------
 // main()
@@ -256,6 +374,7 @@ int main(void) {
 // -------------------------------------------------------------
 // main(): prueba completa del Lottery Scheduler con hilos
 // -------------------------------------------------------------
+/*
 int main(void) {
     Lottery_Scheduler ls;                             // 68) declarar scheduler
     lottery_scheduler_init(&ls);                      // 69) inicializarlo
@@ -315,3 +434,63 @@ int main(void) {
     free(t3.stack);
     return 0;
 }
+*/
+/* main de prueba edf */
+/*
+int main(void) {
+    EDF_Scheduler edf;
+    edf_scheduler_init(&edf);
+    ES = &edf;
+
+
+    TCB t1, t2, t3;
+    int a1 = 1, a2 = 2, a3 = 3;
+
+
+    getcontext(&t1.context);
+    t1.stack = malloc(64*1024);
+    t1.context.uc_stack.ss_sp   = t1.stack;
+    t1.context.uc_stack.ss_size = 64*1024;
+    t1.context.uc_link          = NULL;
+    makecontext(&t1.context, (void(*)(void))thread_func_edf, 1, a1);
+    t1.tid      = 1;
+    t1.deadline = 200;
+    t1.state    = READY;
+    t1.next     = NULL;
+
+
+    getcontext(&t2.context);
+    t2.stack = malloc(64*1024);
+    t2.context.uc_stack.ss_sp   = t2.stack;
+    t2.context.uc_stack.ss_size = 64*1024;
+    t2.context.uc_link          = NULL;
+    makecontext(&t2.context, (void(*)(void))thread_func, 1, a2);
+    t2.tid      = 2;
+    t2.deadline = 150;
+    t2.state    = READY;
+    t2.next     = NULL;
+
+
+    getcontext(&t3.context);
+    t3.stack = malloc(64*1024);
+    t3.context.uc_stack.ss_sp   = t3.stack;
+    t3.context.uc_stack.ss_size = 64*1024;
+    t3.context.uc_link          = NULL;
+    makecontext(&t3.context, (void(*)(void))thread_func, 1, a3);
+    t3.tid      = 3;
+    t3.deadline = 300;
+    t3.state    = READY;
+    t3.next     = NULL;
+
+
+    edf.base.encolar_hilo((Scheduler*)&edf, &t1);
+    edf.base.encolar_hilo((Scheduler*)&edf, &t2);
+    edf.base.encolar_hilo((Scheduler*)&edf, &t3);
+
+
+    hilo_actual = edf.base.siguiente_hilo((Scheduler*)&edf);
+    swapcontext(&(ucontext_t){0}, &hilo_actual->context);
+
+    return 0;
+}
+*/
