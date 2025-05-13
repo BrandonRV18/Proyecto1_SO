@@ -208,15 +208,31 @@ static void lottery_encolar_hilo(Scheduler *sched, TCB *hilo) {
         ls->head = hilo;
     } else {
         TCB *it = ls->head;
-        while (it->next) it = it->next;
+        while (it->next) {
+            it = it->next;
+        }
         it->next = hilo;
     }
 }
 
 
-// Selecciona el siguiente hilo por sorteo de tickets
 static TCB *lottery_siguiente_hilo(Scheduler *sched) {
     Lottery_Scheduler *ls = (Lottery_Scheduler*)sched;
+    TCB *prev = hilo_actual;
+
+    if (prev && prev->state == RUNNING) {
+        prev->state = READY;
+        prev->next  = NULL;
+
+        if (!ls->head) {
+            ls->head = prev;
+        } else {
+            TCB *it = ls->head;
+            while (it->next) it = it->next;
+            it->next = prev;
+        }
+    }
+
     int total = 0;
     for (TCB *it = ls->head; it; it = it->next) {
         if (it->state == READY)
@@ -224,17 +240,37 @@ static TCB *lottery_siguiente_hilo(Scheduler *sched) {
     }
     if (total <= 0)
         return NULL;
+
     int winner = (rand() % total) + 1;
     int acc    = 0;
-    for (TCB *it = ls->head; it; it = it->next) {
-        if (it->state != READY) continue;
+
+    TCB *mejor = NULL;
+    TCB *prev_mejor = NULL;
+    TCB *it = ls->head;
+    TCB *prev_it = NULL;
+
+    for (; it; prev_it = it, it = it->next) {
+        if (it->state != READY)
+            continue;
         acc += it->tickets;
         if (acc >= winner) {
-            it->state = RUNNING;
-            return it;
+            mejor       = it;
+            prev_mejor  = prev_it;
+            break;
         }
     }
-    return NULL;
+
+    if (!mejor)
+        return NULL;
+
+    if (prev_mejor)
+        prev_mejor->next = mejor->next;
+    else
+        ls->head = mejor->next;
+
+    mejor->next = NULL;
+    mejor->state = RUNNING;
+    return mejor;
 }
 
 // Quita t de la lista enlazada de LOTTERY
@@ -260,11 +296,13 @@ static void lottery_remover_hilo(Scheduler *sched, TCB *hilo) {
 
 
 // Inicializa el scheduler de lotería (sin preempción periódica)
-void lottery_scheduler_init(Lottery_Scheduler *ls) {
+void lottery_scheduler_init(Lottery_Scheduler *ls, int quantum_ms) {
     ls->base.encolar_hilo   = lottery_encolar_hilo;
     ls->base.siguiente_hilo = lottery_siguiente_hilo;
     ls->base.remover_hilo    = lottery_remover_hilo;
     ls->head                = NULL;
+    ls->quantum             = quantum_ms;
+    start_preemption(quantum_ms);
     srand((unsigned)time(NULL));
 }
 
@@ -473,7 +511,7 @@ int main(void) {
 /*
 int main(void) {
     Lottery_Scheduler ls;                             // 68) declarar scheduler
-    lottery_scheduler_init(&ls);                      // 69) inicializarlo
+    lottery_scheduler_init(&ls, 100);                      // 69) inicializarlo
 
     // 70) crear tres TCB de prueba
     TCB t1, t2, t3;

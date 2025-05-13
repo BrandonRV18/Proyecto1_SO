@@ -52,6 +52,7 @@ struct RR_Scheduler {
 struct Lottery_Scheduler {
     Scheduler base;
     TCB      *head;
+    int quantum;
 };
 
 struct EDF_Scheduler {
@@ -80,7 +81,7 @@ void   encolar_hilo(Scheduler *sched, TCB *t);
 void   schedule(void);
 
 void   rr_scheduler_init(RR_Scheduler *rr, int quantum_ms);
-void   lottery_scheduler_init(Lottery_Scheduler *ls);
+void   lottery_scheduler_init(Lottery_Scheduler *ls, int quantum_ms);
 void   edf_scheduler_init(EDF_Scheduler *es);
 
 #endif
