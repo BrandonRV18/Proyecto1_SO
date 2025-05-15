@@ -7,4 +7,5 @@ add_executable(Proyecto1_SO
         main.c
         scheduler.c
         my_pthread.c
+        animator.c
 )
