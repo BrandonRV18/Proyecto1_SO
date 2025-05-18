@@ -1,18 +1,28 @@
 #define _POSIX_C_SOURCE 200809L
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
+#include <ncurses.h>
+#include <ucontext.h>
+#include "my_pthread.h"
+#include "scheduler.h"  // EDF_Scheduler, edf_scheduler_init, schedule(), hilo_actual
 
+// --- Parser manual de config.ini ---
 #define LINE_MAX 256
 #define INITIAL_SHAPE_CAP   4
 #define INITIAL_MONITOR_CAP 4
 
-// Descripción de una figura animada
 typedef struct {
     char *name;
     char *shape_file;
+
+    // Contenido de la forma ASCII
+    char **shape_lines;
+    int    line_count;
+    int    line_capacity;
+
     int   x_start, y_start;
     int   x_end,   y_end;
     int   rotation;
@@ -22,44 +32,28 @@ typedef struct {
     int   deadline;
 } ShapeConfig;
 
-// Configuración global
 typedef struct {
-    int    width, height;
+    int width, height;
     char **monitors;
-    int    monitor_count, monitor_capacity;
-
+    int monitor_count, monitor_capacity;
     ShapeConfig *shapes;
-    int          shape_count, shape_capacity;
+    int shape_count, shape_capacity;
 } Config;
 
-// Funciones auxiliares para trim:
-static char *ltrim(char *s) {
-    while (isspace((unsigned char)*s)) s++;
-    return s;
-}
-static char *rtrim(char *s) {
-    char *end = s + strlen(s) - 1;
-    while (end >= s && isspace((unsigned char)*end)) *end-- = '\0';
-    return s;
-}
-static char *trim(char *s) {
-    return rtrim(ltrim(s));
-}
+static char *ltrim(char *s) { while (isspace((unsigned char)*s)) s++; return s; }
+static char *rtrim(char *s) { char *e = s + strlen(s) - 1; while (e >= s && isspace((unsigned char)*e)) *e-- = '\0'; return s; }
+static char *trim(char *s)  { return rtrim(ltrim(s)); }
 
-// Inicializa la estructura
 static void init_config(Config *cfg) {
     cfg->width = cfg->height = 0;
-
     cfg->monitor_capacity = INITIAL_MONITOR_CAP;
-    cfg->monitor_count    = 0;
-    cfg->monitors         = malloc(sizeof(char*) * cfg->monitor_capacity);
-
+    cfg->monitor_count = 0;
+    cfg->monitors = malloc(sizeof(char*) * cfg->monitor_capacity);
     cfg->shape_capacity = INITIAL_SHAPE_CAP;
-    cfg->shape_count    = 0;
-    cfg->shapes         = malloc(sizeof(ShapeConfig) * cfg->shape_capacity);
+    cfg->shape_count = 0;
+    cfg->shapes = malloc(sizeof(ShapeConfig) * cfg->shape_capacity);
 }
 
-// Añade nueva ShapeConfig cuando se detecta una sección distinta a Canvas/Monitors:
 static ShapeConfig *add_shape(Config *cfg, const char *section) {
     if (cfg->shape_count >= cfg->shape_capacity) {
         cfg->shape_capacity *= 2;
@@ -72,70 +66,50 @@ static ShapeConfig *add_shape(Config *cfg, const char *section) {
     return sh;
 }
 
-// Parser manual de config.ini:
 Config *load_config(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
-
-    Config *cfg = malloc(sizeof(Config));
-    init_config(cfg);
-
-    char line[LINE_MAX];
-    char current_section[LINE_MAX] = "";
-    ShapeConfig *cur_shape = NULL;
-
+    FILE *f = fopen(path, "r"); if (!f) return NULL;
+    Config *cfg = malloc(sizeof(Config)); init_config(cfg);
+    char line[LINE_MAX], section[LINE_MAX] = "";
+    ShapeConfig *cur = NULL;
     while (fgets(line, LINE_MAX, f)) {
         char *s = trim(line);
-        if (s[0] == '\0' || s[0] == ';' || s[0] == '#') continue;
+        if (!*s || s[0] == ';' || s[0] == '#') continue;
         if (s[0] == '[') {
-            char *end = strchr(s, ']');
-            if (!end) continue;
-            *end = '\0';
-            strncpy(current_section, s+1, sizeof(current_section)-1);
-            current_section[sizeof(current_section)-1] = '\0';
-            if (strcmp(current_section, "Canvas") && strcmp(current_section, "Monitors")) {
-                cur_shape = add_shape(cfg, current_section);
+            char *e = strchr(s, ']'); if (!e) continue;
+            *e = '\0'; strncpy(section, s+1, sizeof(section)-1);
+            if (strcmp(section, "Canvas") && strcmp(section, "Monitors")) {
+                cur = add_shape(cfg, section);
             }
-        } else {
-            char *eq = strchr(s, '=');
-            if (!eq) continue;
-            *eq = '\0';
-            char *key = trim(s);
-            char *val = trim(eq+1);
-
-            if (!strcmp(current_section, "Canvas")) {
-                if (!strcmp(key, "width"))  cfg->width  = atoi(val);
-                if (!strcmp(key, "height")) cfg->height = atoi(val);
-            }
-            else if (!strcmp(current_section, "Monitors")) {
-                if (!strcmp(key, "monitors")) {
-                    char *tok = strtok(val, ",");
+        } else if (cur || !strcmp(section, "Canvas") || !strcmp(section, "Monitors")) {
+            char *eq = strchr(s, '='); if (!eq) continue;
+            *eq = '\0'; char *k = trim(s), *v = trim(eq + 1);
+            if (!strcmp(section, "Canvas")) {
+                if (!strcmp(k, "width"))  cfg->width = atoi(v);
+                if (!strcmp(k, "height")) cfg->height = atoi(v);
+            } else if (!strcmp(section, "Monitors")) {
+                if (!strcmp(k, "monitors")) {
+                    char *tok = strtok(v, ",");
                     while (tok) {
-                        char *m = trim(tok);
                         if (cfg->monitor_count >= cfg->monitor_capacity) {
                             cfg->monitor_capacity *= 2;
-                            cfg->monitors = realloc(cfg->monitors,
-                              sizeof(char*) * cfg->monitor_capacity);
+                            cfg->monitors = realloc(cfg->monitors, sizeof(char*) * cfg->monitor_capacity);
                         }
-                        cfg->monitors[cfg->monitor_count++] = strdup(m);
+                        cfg->monitors[cfg->monitor_count++] = strdup(trim(tok));
                         tok = strtok(NULL, ",");
                     }
                 }
-            }
-            else if (cur_shape) {
-                if (!strcmp(key, "shape_file"))    cur_shape->shape_file = strdup(val);
-                else if (!strcmp(key, "x_start"))  cur_shape->x_start    = atoi(val);
-                else if (!strcmp(key, "y_start"))  cur_shape->y_start    = atoi(val);
-                else if (!strcmp(key, "x_end"))    cur_shape->x_end      = atoi(val);
-                else if (!strcmp(key, "y_end"))    cur_shape->y_end      = atoi(val);
-                else if (!strcmp(key, "rotation")) cur_shape->rotation   = atoi(val);
-                else if (!strcmp(key, "start_time") || !strcmp(key, "star_time"))
-                                                    cur_shape->start_time = atoi(val);
-                else if (!strcmp(key, "end_time")) cur_shape->end_time   = atoi(val);
-                else if (!strcmp(key, "scheduler")) strncpy(cur_shape->scheduler, val,
-                                               sizeof(cur_shape->scheduler)-1);
-                else if (!strcmp(key, "tickets"))   cur_shape->tickets    = atoi(val);
-                else if (!strcmp(key, "deadline"))  cur_shape->deadline   = atoi(val);
+            } else {
+                if (!strcmp(k, "shape_file"))     cur->shape_file = strdup(v);
+                else if (!strcmp(k, "x_start"))   cur->x_start    = atoi(v);
+                else if (!strcmp(k, "y_start"))   cur->y_start    = atoi(v);
+                else if (!strcmp(k, "x_end"))     cur->x_end      = atoi(v);
+                else if (!strcmp(k, "y_end"))     cur->y_end      = atoi(v);
+                else if (!strcmp(k, "rotation"))  cur->rotation   = atoi(v);
+                else if (!strcmp(k, "start_time")||!strcmp(k, "star_time")) cur->start_time = atoi(v);
+                else if (!strcmp(k, "end_time"))  cur->end_time   = atoi(v);
+                else if (!strcmp(k, "scheduler")) strncpy(cur->scheduler, v, sizeof(cur->scheduler)-1);
+                else if (!strcmp(k, "tickets"))   cur->tickets    = atoi(v);
+                else if (!strcmp(k, "deadline"))  cur->deadline   = atoi(v);
             }
         }
     }
@@ -143,9 +117,227 @@ Config *load_config(const char *path) {
     return cfg;
 }
 
+static void load_shapes_content(Config *cfg) {
+    for (int i = 0; i < cfg->shape_count; i++) {
+        ShapeConfig *sh = &cfg->shapes[i];
+        FILE *f = fopen(sh->shape_file, "r");
+        if (!f) {
+            fprintf(stderr, "No se pudo abrir shape_file %s\n", sh->shape_file);
+            continue;
+        }
+        sh->line_capacity = 16;
+        sh->line_count = 0;
+        sh->shape_lines = malloc(sizeof(char*) * sh->line_capacity);
 
-int main(int argc, char **argv) {
+        char buf[LINE_MAX];
+        while (fgets(buf, LINE_MAX, f)) {
+            if (sh->line_count >= sh->line_capacity) {
+                sh->line_capacity *= 2;
+                sh->shape_lines = realloc(sh->shape_lines,
+                                          sizeof(char*) * sh->line_capacity);
+            }
+            buf[strcspn(buf, "\n")] = '\0';
+            sh->shape_lines[sh->line_count++] = strdup(buf);
+        }
+        fclose(f);
+    }
+}
 
+// --- Animación con hilos y ncurses usando EDF Scheduler ---
+
+static WINDOW *win;
+static my_mutex canvas_mutex;
+static Config *global_cfg = NULL;
+
+// Función para verificar si un carácter de la figura colisiona
+static int is_position_occupied(my_mutex *mutex, int x, int y, int current_tid) {
+    // Verificar límites del canvas
+    if (x < 0 || x >= global_cfg->width || y < 0 || y >= global_cfg->height) {
+        return 1;
+    }
+
+    CanvasPosition *pos = mutex->occupied_positions;
+    while (pos) {
+        if (pos->x == x && pos->y == y) {
+            // Si la posición está ocupada por otro hilo
+            return pos->owner_tid != current_tid;
+        }
+        pos = pos->next;
+    }
     return 0;
 }
 
+static void occupy_position(my_mutex *mutex, int x, int y, int owner_tid) {
+    CanvasPosition *new_pos = malloc(sizeof(CanvasPosition));
+    new_pos->x = x;
+    new_pos->y = y;
+    new_pos->owner_tid = owner_tid;
+    new_pos->next = mutex->occupied_positions;
+    mutex->occupied_positions = new_pos;
+}
+
+static void free_position(my_mutex *mutex, int x, int y, int owner_tid) {
+    CanvasPosition **ptr = &mutex->occupied_positions;
+    while (*ptr) {
+        if ((*ptr)->x == x && (*ptr)->y == y && (*ptr)->owner_tid == owner_tid) {
+            CanvasPosition *to_free = *ptr;
+            *ptr = (*ptr)->next;
+            free(to_free);
+            return;
+        }
+        ptr = &(*ptr)->next;
+    }
+}
+
+void animate_shape(void *arg) {
+    ShapeConfig *sh = (ShapeConfig*)arg;
+    int dx = sh->x_end - sh->x_start;
+    int dy = sh->y_end - sh->y_start;
+    int steps = (int)(sqrt(dx*dx + dy*dy));
+
+    int prev_x = sh->x_start;
+    int prev_y = sh->y_start;
+    int current_tid = hilo_actual->tid;
+
+    // Ocupar posición inicial
+    my_mutex_lock(&canvas_mutex);
+    for (int ly = 0; ly < sh->line_count; ly++) {
+        for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
+            if (sh->shape_lines[ly][lx] != ' ') {
+                occupy_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
+            }
+        }
+    }
+    my_mutex_unlock(&canvas_mutex);
+
+    for (int i = 0; i <= steps; i++) {
+        // Cálculo de posición con interpolación lineal
+        float progress = (float)i / steps;
+        int x = sh->x_start + (int)(dx * progress);
+        int y = sh->y_start + (int)(dy * progress);
+
+        // Verificar colisión para todas las posiciones que ocupará la figura
+        int can_move = 1;
+        my_mutex_lock(&canvas_mutex);
+        for (int ly = 0; ly < sh->line_count && can_move; ly++) {
+            for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
+                if (sh->shape_lines[ly][lx] != ' ' &&
+                    is_position_occupied(&canvas_mutex, x + lx, y + ly, current_tid)) {
+                    can_move = 0;
+                    break;
+                }
+            }
+        }
+
+        if (can_move) {
+            // Borrar figura completa en posición anterior
+            for (int ly = 0; ly < sh->line_count; ly++) {
+                if (prev_y + ly >= 0 && prev_y + ly < global_cfg->height) {
+                    mvwprintw(win, prev_y + ly + 1, prev_x + 1, "%*s",
+                             (int)strlen(sh->shape_lines[ly]), "");
+                }
+            }
+
+            // Liberar posiciones anteriores
+            for (int ly = 0; ly < sh->line_count; ly++) {
+                for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
+                    if (sh->shape_lines[ly][lx] != ' ') {
+                        free_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
+                    }
+                }
+            }
+
+            // Ocupar nuevas posiciones
+            for (int ly = 0; ly < sh->line_count; ly++) {
+                for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
+                    if (sh->shape_lines[ly][lx] != ' ') {
+                        occupy_position(&canvas_mutex, x + lx, y + ly, current_tid);
+                    }
+                }
+            }
+
+            // Dibujar figura completa en nueva posición (ATÓMICO)
+            for (int ly = 0; ly < sh->line_count; ly++) {
+                mvwprintw(win, y + ly + 1, x + 1, "%s", sh->shape_lines[ly]);
+            }
+            wrefresh(win);
+
+            prev_x = x;
+            prev_y = y;
+        }
+        my_mutex_unlock(&canvas_mutex);
+
+        // Pausa más corta para movimiento más fluido
+        napms(100);
+        my_thread_yield();
+
+        if (!can_move) i--;
+    }
+
+    // Liberar posiciones finales
+    my_mutex_lock(&canvas_mutex);
+    for (int ly = 0; ly < sh->line_count; ly++) {
+        for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
+            if (sh->shape_lines[ly][lx] != ' ') {
+                free_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
+            }
+        }
+    }
+    my_mutex_unlock(&canvas_mutex);
+
+    my_thread_end();
+}
+
+// --- main_animator.c ---
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Uso: %s config.ini\n", argv[0]);
+        return 1;
+    }
+    global_cfg = load_config(argv[1]);
+    if (!global_cfg) {
+        fprintf(stderr, "Error al cargar configuración\n");
+        return 1;
+    }
+    load_shapes_content(global_cfg);
+
+
+
+    initscr(); cbreak(); noecho();
+    win = newwin(global_cfg->height, global_cfg->width, 0, 0);
+    my_mutex_init(&canvas_mutex);
+
+
+    RR_Scheduler rr;
+    const int QUANTUM_MS = 100;
+    rr_scheduler_init(&rr, QUANTUM_MS);
+    Scheduler *sched = (Scheduler*)&rr;
+
+    // Creamos un hilo por cada shape
+    for (int i = 0; i < global_cfg->shape_count; i++) {
+        ShapeConfig *sh = &global_cfg->shapes[i];
+        my_thread_create(
+            animate_shape,
+            sh,
+            sched,
+            sh->tickets,      // tickets (no importa RR)
+            0,                // priority (no usado en RR)
+            sh->deadline      // deadline (no usado en RR)
+        );
+    }
+
+    // Arrancamos la primera ejecución y permitimos que RR intervenga
+    ucontext_t main_ctx;
+    getcontext(&main_ctx);
+    TCB *first = sched->siguiente_hilo(sched);
+    if (first) {
+        hilo_actual = first;
+        swapcontext(&main_ctx, &first->context);
+    }
+
+    // Al volver, esperamos tecla y cerramos
+    getch();
+    endwin();
+    return 0;
+
+}

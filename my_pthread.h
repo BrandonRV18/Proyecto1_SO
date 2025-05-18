@@ -14,11 +14,20 @@ void  my_thread_yield(void);
 void  my_thread_join(int tid);
 int   my_thread_detach(int tid);
 
+typedef struct canvas_position {
+    int x;
+    int y;
+    int owner_tid;
+    struct canvas_position *next;
+} CanvasPosition;
+
+
 typedef struct my_mutex {
     int bloqueado;
     TCB *propietario;
     TCB *head;
     TCB *tail;
+    CanvasPosition *occupied_positions;
 } my_mutex;
 
 /* -------------------------------------------------------------

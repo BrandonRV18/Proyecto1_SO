@@ -139,6 +139,7 @@ int my_mutex_init(my_mutex *mutex) {
     mutex->propietario = NULL;
     mutex->head = NULL;
     mutex->tail = NULL;
+    mutex->occupied_positions = NULL;
     return 0;
 }
 
