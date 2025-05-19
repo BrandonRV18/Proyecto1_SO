@@ -77,7 +77,7 @@ void schedule(void) {
     TCB *prev      = hilo_actual;
     Scheduler *sch = prev->scheduler;
     TCB *next      = sch->siguiente_hilo(sch);
-    if (next == NULL) return;
+    if (next == NULL || next == prev) return;
     hilo_actual = next;
     swapcontext(&prev->context, &next->context);
 }

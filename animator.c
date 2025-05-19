@@ -13,6 +13,9 @@
 #define LINE_MAX 256
 #define INITIAL_SHAPE_CAP   4
 #define INITIAL_MONITOR_CAP 4
+#ifndef MAX
+#define MAX(a,b) (((a) > (b)) ? (a) : (b))
+#endif
 
 typedef struct {
     char *name;
@@ -30,6 +33,7 @@ typedef struct {
     char  scheduler[32];
     int   tickets;
     int   deadline;
+    int   color_pair;
 } ShapeConfig;
 
 typedef struct {
@@ -149,6 +153,84 @@ static WINDOW *win;
 static my_mutex canvas_mutex;
 static Config *global_cfg = NULL;
 
+char **rotate_ascii(char **lines, int h, int w,
+                    int rotation, int *out_h, int *out_w)
+{
+    // normalizar el ancho de cada línea a w
+    char **grid = malloc(sizeof(char*) * h);
+    for (int i = 0; i < h; i++) {
+        grid[i] = malloc(w+1);
+        int len = strlen(lines[i]);
+        memcpy(grid[i], lines[i], len);
+        memset(grid[i] + len, ' ', w - len);
+        grid[i][w] = '\0';
+    }
+
+    char **res;
+    switch (rotation) {
+      case   0:
+        *out_h = h; *out_w = w;
+        res = malloc(sizeof(char*) * h);
+        for (int i = 0; i < h; i++) {
+          res[i] = strdup(grid[i]);
+        }
+        break;
+
+      case  90:
+        *out_h = w; *out_w = h;
+        res = malloc(sizeof(char*) * (*out_h));
+        for (int i = 0; i < *out_h; i++) {
+          res[i] = malloc(*out_w+1);
+          for (int j = 0; j < *out_w; j++) {
+            // fila i, col j toma de grid[h-1-j][i]
+            res[i][j] = grid[h-1-j][i];
+          }
+          res[i][*out_w] = '\0';
+        }
+        break;
+
+      case 180:
+        *out_h = h; *out_w = w;
+        res = malloc(sizeof(char*) * h);
+        for (int i = 0; i < h; i++) {
+          res[i] = malloc(w+1);
+          for (int j = 0; j < w; j++) {
+            res[i][j] = grid[h-1-i][w-1-j];
+          }
+          res[i][w] = '\0';
+        }
+        break;
+
+      case 270:
+        *out_h = w; *out_w = h;
+        res = malloc(sizeof(char*) * (*out_h));
+        for (int i = 0; i < *out_h; i++) {
+          res[i] = malloc(*out_w+1);
+          for (int j = 0; j < *out_w; j++) {
+            // fila i, col j toma de grid[j][w-1-i]
+            res[i][j] = grid[j][w-1-i];
+          }
+          res[i][*out_w] = '\0';
+        }
+        break;
+
+      default:
+        // ángulo inválido, devolvemos copia simple
+        *out_h = h; *out_w = w;
+        res = malloc(sizeof(char*) * h);
+        for (int i = 0; i < h; i++) {
+          res[i] = strdup(grid[i]);
+        }
+        break;
+    }
+
+    // liberar grid intermedio
+    for (int i = 0; i < h; i++) free(grid[i]);
+    free(grid);
+    return res;
+}
+
+
 // Función para verificar si un carácter de la figura colisiona
 static int is_position_occupied(my_mutex *mutex, int x, int y, int current_tid) {
     // Verificar límites del canvas
@@ -191,38 +273,76 @@ static void free_position(my_mutex *mutex, int x, int y, int owner_tid) {
 
 void animate_shape(void *arg) {
     ShapeConfig *sh = (ShapeConfig*)arg;
-    int dx = sh->x_end - sh->x_start;
-    int dy = sh->y_end - sh->y_start;
+    int dx    = sh->x_end   - sh->x_start;
+    int dy    = sh->y_end   - sh->y_start;
     int steps = (int)(sqrt(dx*dx + dy*dy));
-
-    int prev_x = sh->x_start;
-    int prev_y = sh->y_start;
+    int prev_x = sh->x_start, prev_y = sh->y_start;
     int current_tid = hilo_actual->tid;
 
-    // Ocupar posición inicial
-    my_mutex_lock(&canvas_mutex);
-    for (int ly = 0; ly < sh->line_count; ly++) {
-        for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
-            if (sh->shape_lines[ly][lx] != ' ') {
-                occupy_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
-            }
-        }
+    // --- Preparar dimensiones originales ---
+    int orig_h = sh->line_count;
+    int orig_w = 0;
+    for (int k = 0; k < orig_h; k++) {
+        orig_w = MAX(orig_w, (int)strlen(sh->shape_lines[k]));
     }
+
+    // --- Ángulo acumulado de rotación ---
+    int angle_current = 0;
+
+    // --- Buffer rotado anterior, empieza sin rotación ---
+    int rot_h_prev, rot_w_prev;
+    char **rotated_prev = rotate_ascii(
+        sh->shape_lines, orig_h, orig_w,
+        angle_current, &rot_h_prev, &rot_w_prev
+    );
+
+    // 1) Dibujar y ocupar la forma inicial (sin rotar)
+    my_mutex_lock(&canvas_mutex);
+      wattron(win, COLOR_PAIR(sh->color_pair));
+      for (int ly = 0; ly < rot_h_prev; ly++) {
+        for (int lx = 0; lx < rot_w_prev; lx++) {
+          char c = rotated_prev[ly][lx];
+          if (c != ' ') {
+            occupy_position(&canvas_mutex,
+                            prev_x + lx, prev_y + ly,
+                            current_tid);
+            mvwaddch(win,
+                     prev_y + ly + 1,
+                     prev_x + lx + 1,
+                     c);
+          }
+        }
+      }
+      wattroff(win, COLOR_PAIR(sh->color_pair));
+      wrefresh(win);
     my_mutex_unlock(&canvas_mutex);
 
-    for (int i = 0; i <= steps; i++) {
-        // Cálculo de posición con interpolación lineal
+    // --- Bucle de animación ---
+    for (int i = 1; i <= steps; i++) {
+        // 2) Avanzar posición
         float progress = (float)i / steps;
         int x = sh->x_start + (int)(dx * progress);
         int y = sh->y_start + (int)(dy * progress);
 
-        // Verificar colisión para todas las posiciones que ocupará la figura
+        // 3) Actualizar ángulo acumulado
+        angle_current = (angle_current + sh->rotation) % 360;
+
+        // 4) Obtener nueva versión rotada
+        int rot_h, rot_w;
+        char **rotated = rotate_ascii(
+            sh->shape_lines, orig_h, orig_w,
+            angle_current, &rot_h, &rot_w
+        );
+
+        // 5) Chequear colisión
         int can_move = 1;
         my_mutex_lock(&canvas_mutex);
-        for (int ly = 0; ly < sh->line_count && can_move; ly++) {
-            for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
-                if (sh->shape_lines[ly][lx] != ' ' &&
-                    is_position_occupied(&canvas_mutex, x + lx, y + ly, current_tid)) {
+        for (int ly = 0; ly < rot_h && can_move; ly++) {
+            for (int lx = 0; lx < rot_w; lx++) {
+                if (rotated[ly][lx] != ' ' &&
+                    is_position_occupied(&canvas_mutex,
+                                         x + lx, y + ly,
+                                         current_tid)) {
                     can_move = 0;
                     break;
                 }
@@ -230,60 +350,87 @@ void animate_shape(void *arg) {
         }
 
         if (can_move) {
-            // Borrar figura completa en posición anterior
-            for (int ly = 0; ly < sh->line_count; ly++) {
-                if (prev_y + ly >= 0 && prev_y + ly < global_cfg->height) {
-                    mvwprintw(win, prev_y + ly + 1, prev_x + 1, "%*s",
-                             (int)strlen(sh->shape_lines[ly]), "");
-                }
-            }
-
-            // Liberar posiciones anteriores
-            for (int ly = 0; ly < sh->line_count; ly++) {
-                for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
-                    if (sh->shape_lines[ly][lx] != ' ') {
-                        free_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
+            // 6) Borrado fino de la forma anterior
+            for (int ly = 0; ly < rot_h_prev; ly++) {
+                for (int lx = 0; lx < rot_w_prev; lx++) {
+                    if (rotated_prev[ly][lx] != ' ') {
+                        free_position(&canvas_mutex,
+                                      prev_x + lx, prev_y + ly,
+                                      current_tid);
+                        if (!is_position_occupied(&canvas_mutex,
+                                                  prev_x + lx, prev_y + ly,
+                                                  current_tid)) {
+                            mvwaddch(win,
+                                     prev_y + ly + 1,
+                                     prev_x + lx + 1,
+                                     ' ');
+                        }
                     }
                 }
             }
 
-            // Ocupar nuevas posiciones
-            for (int ly = 0; ly < sh->line_count; ly++) {
-                for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
-                    if (sh->shape_lines[ly][lx] != ' ') {
-                        occupy_position(&canvas_mutex, x + lx, y + ly, current_tid);
+            // 7) Dibujar y ocupar la nueva forma (rotada)
+            wattron(win, COLOR_PAIR(sh->color_pair));
+            for (int ly = 0; ly < rot_h; ly++) {
+                for (int lx = 0; lx < rot_w; lx++) {
+                    char c = rotated[ly][lx];
+                    if (c != ' ') {
+                        occupy_position(&canvas_mutex,
+                                        x + lx, y + ly,
+                                        current_tid);
+                        mvwaddch(win,
+                                 y + ly + 1,
+                                 x + lx + 1,
+                                 c);
                     }
                 }
             }
-
-            // Dibujar figura completa en nueva posición (ATÓMICO)
-            for (int ly = 0; ly < sh->line_count; ly++) {
-                mvwprintw(win, y + ly + 1, x + 1, "%s", sh->shape_lines[ly]);
-            }
+            wattroff(win, COLOR_PAIR(sh->color_pair));
             wrefresh(win);
 
-            prev_x = x;
-            prev_y = y;
+            // 8) Actualizar prev_* y buffers
+            prev_x = x;  prev_y = y;
+            for (int k = 0; k < rot_h_prev; k++) free(rotated_prev[k]);
+            free(rotated_prev);
+            rotated_prev = rotated;
+            rot_h_prev   = rot_h;
+            rot_w_prev   = rot_w;
+        } else {
+            // Si no puede moverse, descartamos este buffer
+            for (int k = 0; k < rot_h; k++) free(rotated[k]);
+            free(rotated);
+            i--;  // reintentar el mismo paso
         }
         my_mutex_unlock(&canvas_mutex);
 
-        // Pausa más corta para movimiento más fluido
         napms(100);
         my_thread_yield();
-
-        if (!can_move) i--;
     }
 
-    // Liberar posiciones finales
+    // --- Limpieza final (igual que antes) ---
     my_mutex_lock(&canvas_mutex);
-    for (int ly = 0; ly < sh->line_count; ly++) {
-        for (int lx = 0; lx < strlen(sh->shape_lines[ly]); lx++) {
-            if (sh->shape_lines[ly][lx] != ' ') {
-                free_position(&canvas_mutex, prev_x + lx, prev_y + ly, current_tid);
+    for (int ly = 0; ly < rot_h_prev; ly++) {
+        for (int lx = 0; lx < rot_w_prev; lx++) {
+            if (rotated_prev[ly][lx] != ' ') {
+                free_position(&canvas_mutex,
+                              prev_x + lx, prev_y + ly,
+                              current_tid);
+                if (!is_position_occupied(&canvas_mutex,
+                                          prev_x + lx, prev_y + ly,
+                                          current_tid)) {
+                    mvwaddch(win,
+                             prev_y + ly + 1,
+                             prev_x + lx + 1,
+                             ' ');
+                }
             }
         }
     }
+    wrefresh(win);
     my_mutex_unlock(&canvas_mutex);
+
+    for (int k = 0; k < rot_h_prev; k++) free(rotated_prev[k]);
+    free(rotated_prev);
 
     my_thread_end();
 }
@@ -304,6 +451,31 @@ int main(int argc, char *argv[]) {
 
 
     initscr(); cbreak(); noecho();
+
+    if (!has_colors()) {
+        endwin();
+        fprintf(stderr, "Tu terminal no soporta colores.\n");
+        return 1;
+    }
+    start_color();
+
+    // Lista de colores (puedes reordenar o recortar):
+    int basic_colors[] = {
+        COLOR_RED, COLOR_GREEN, COLOR_YELLOW,
+        COLOR_BLUE, COLOR_MAGENTA, COLOR_CYAN,
+        COLOR_WHITE
+    };
+    int n_colors = sizeof(basic_colors)/sizeof(*basic_colors);
+
+    // Para cada shape, asignamos un par único y lo guardamos:
+    for (int i = 0; i < global_cfg->shape_count; i++) {
+        int pair = i + 1;  // los pares empiezan en 1
+        int fg = basic_colors[i % n_colors];
+        init_pair(pair, fg, COLOR_BLACK);
+        global_cfg->shapes[i].color_pair = pair;
+    }
+
+
     win = newwin(global_cfg->height, global_cfg->width, 0, 0);
     my_mutex_init(&canvas_mutex);
 
