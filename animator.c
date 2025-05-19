@@ -147,7 +147,7 @@ static void load_shapes_content(Config *cfg) {
     }
 }
 
-// --- Animación con hilos y ncurses usando EDF Scheduler ---
+// --- Animación con hilos y ncurses
 
 static WINDOW *win;
 static my_mutex canvas_mutex;
@@ -156,7 +156,7 @@ static Config *global_cfg = NULL;
 char **rotate_ascii(char **lines, int h, int w,
                     int rotation, int *out_h, int *out_w)
 {
-    // normalizar el ancho de cada línea a w
+
     char **grid = malloc(sizeof(char*) * h);
     for (int i = 0; i < h; i++) {
         grid[i] = malloc(w+1);
@@ -182,7 +182,7 @@ char **rotate_ascii(char **lines, int h, int w,
         for (int i = 0; i < *out_h; i++) {
           res[i] = malloc(*out_w+1);
           for (int j = 0; j < *out_w; j++) {
-            // fila i, col j toma de grid[h-1-j][i]
+
             res[i][j] = grid[h-1-j][i];
           }
           res[i][*out_w] = '\0';
@@ -207,7 +207,7 @@ char **rotate_ascii(char **lines, int h, int w,
         for (int i = 0; i < *out_h; i++) {
           res[i] = malloc(*out_w+1);
           for (int j = 0; j < *out_w; j++) {
-            // fila i, col j toma de grid[j][w-1-i]
+
             res[i][j] = grid[j][w-1-i];
           }
           res[i][*out_w] = '\0';
@@ -215,7 +215,7 @@ char **rotate_ascii(char **lines, int h, int w,
         break;
 
       default:
-        // ángulo inválido, devolvemos copia simple
+
         *out_h = h; *out_w = w;
         res = malloc(sizeof(char*) * h);
         for (int i = 0; i < h; i++) {
@@ -224,7 +224,7 @@ char **rotate_ascii(char **lines, int h, int w,
         break;
     }
 
-    // liberar grid intermedio
+
     for (int i = 0; i < h; i++) free(grid[i]);
     free(grid);
     return res;
@@ -279,24 +279,24 @@ void animate_shape(void *arg) {
     int prev_x = sh->x_start, prev_y = sh->y_start;
     int current_tid = hilo_actual->tid;
 
-    // --- Preparar dimensiones originales ---
+
     int orig_h = sh->line_count;
     int orig_w = 0;
     for (int k = 0; k < orig_h; k++) {
         orig_w = MAX(orig_w, (int)strlen(sh->shape_lines[k]));
     }
 
-    // --- Ángulo acumulado de rotación ---
+    // Ángulo acumulado de rotación
     int angle_current = 0;
 
-    // --- Buffer rotado anterior, empieza sin rotación ---
+
     int rot_h_prev, rot_w_prev;
     char **rotated_prev = rotate_ascii(
         sh->shape_lines, orig_h, orig_w,
         angle_current, &rot_h_prev, &rot_w_prev
     );
 
-    // 1) Dibujar y ocupar la forma inicial (sin rotar)
+
     my_mutex_lock(&canvas_mutex);
       wattron(win, COLOR_PAIR(sh->color_pair));
       for (int ly = 0; ly < rot_h_prev; ly++) {
@@ -317,24 +317,24 @@ void animate_shape(void *arg) {
       wrefresh(win);
     my_mutex_unlock(&canvas_mutex);
 
-    // --- Bucle de animación ---
+
     for (int i = 1; i <= steps; i++) {
-        // 2) Avanzar posición
+
         float progress = (float)i / steps;
         int x = sh->x_start + (int)(dx * progress);
         int y = sh->y_start + (int)(dy * progress);
 
-        // 3) Actualizar ángulo acumulado
+
         angle_current = (angle_current + sh->rotation) % 360;
 
-        // 4) Obtener nueva versión rotada
+
         int rot_h, rot_w;
         char **rotated = rotate_ascii(
             sh->shape_lines, orig_h, orig_w,
             angle_current, &rot_h, &rot_w
         );
 
-        // 5) Chequear colisión
+
         int can_move = 1;
         my_mutex_lock(&canvas_mutex);
         for (int ly = 0; ly < rot_h && can_move; ly++) {
@@ -350,7 +350,7 @@ void animate_shape(void *arg) {
         }
 
         if (can_move) {
-            // 6) Borrado fino de la forma anterior
+
             for (int ly = 0; ly < rot_h_prev; ly++) {
                 for (int lx = 0; lx < rot_w_prev; lx++) {
                     if (rotated_prev[ly][lx] != ' ') {
@@ -369,7 +369,7 @@ void animate_shape(void *arg) {
                 }
             }
 
-            // 7) Dibujar y ocupar la nueva forma (rotada)
+
             wattron(win, COLOR_PAIR(sh->color_pair));
             for (int ly = 0; ly < rot_h; ly++) {
                 for (int lx = 0; lx < rot_w; lx++) {
@@ -388,7 +388,7 @@ void animate_shape(void *arg) {
             wattroff(win, COLOR_PAIR(sh->color_pair));
             wrefresh(win);
 
-            // 8) Actualizar prev_* y buffers
+
             prev_x = x;  prev_y = y;
             for (int k = 0; k < rot_h_prev; k++) free(rotated_prev[k]);
             free(rotated_prev);
@@ -396,10 +396,10 @@ void animate_shape(void *arg) {
             rot_h_prev   = rot_h;
             rot_w_prev   = rot_w;
         } else {
-            // Si no puede moverse, descartamos este buffer
+
             for (int k = 0; k < rot_h; k++) free(rotated[k]);
             free(rotated);
-            i--;  // reintentar el mismo paso
+            i--;
         }
         my_mutex_unlock(&canvas_mutex);
 
@@ -407,7 +407,7 @@ void animate_shape(void *arg) {
         my_thread_yield();
     }
 
-    // --- Limpieza final (igual que antes) ---
+
     my_mutex_lock(&canvas_mutex);
     for (int ly = 0; ly < rot_h_prev; ly++) {
         for (int lx = 0; lx < rot_w_prev; lx++) {
@@ -435,7 +435,7 @@ void animate_shape(void *arg) {
     my_thread_end();
 }
 
-// --- main_animator.c ---
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Uso: %s config.ini\n", argv[0]);
@@ -459,7 +459,7 @@ int main(int argc, char *argv[]) {
     }
     start_color();
 
-    // Lista de colores (puedes reordenar o recortar):
+
     int basic_colors[] = {
         COLOR_RED, COLOR_GREEN, COLOR_YELLOW,
         COLOR_BLUE, COLOR_MAGENTA, COLOR_CYAN,
@@ -467,7 +467,7 @@ int main(int argc, char *argv[]) {
     };
     int n_colors = sizeof(basic_colors)/sizeof(*basic_colors);
 
-    // Para cada shape, asignamos un par único y lo guardamos:
+
     for (int i = 0; i < global_cfg->shape_count; i++) {
         int pair = i + 1;  // los pares empiezan en 1
         int fg = basic_colors[i % n_colors];
@@ -485,20 +485,20 @@ int main(int argc, char *argv[]) {
     rr_scheduler_init(&rr, QUANTUM_MS);
     Scheduler *sched = (Scheduler*)&rr;
 
-    // Creamos un hilo por cada shape
+
     for (int i = 0; i < global_cfg->shape_count; i++) {
         ShapeConfig *sh = &global_cfg->shapes[i];
         my_thread_create(
             animate_shape,
             sh,
             sched,
-            sh->tickets,      // tickets (no importa RR)
-            0,                // priority (no usado en RR)
-            sh->deadline      // deadline (no usado en RR)
+            sh->tickets,
+            0,
+            sh->deadline
         );
     }
 
-    // Arrancamos la primera ejecución y permitimos que RR intervenga
+
     ucontext_t main_ctx;
     getcontext(&main_ctx);
     TCB *first = sched->siguiente_hilo(sched);
@@ -507,7 +507,7 @@ int main(int argc, char *argv[]) {
         swapcontext(&main_ctx, &first->context);
     }
 
-    // Al volver, esperamos tecla y cerramos
+
     getch();
     endwin();
     return 0;
