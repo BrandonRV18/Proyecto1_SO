@@ -344,6 +344,7 @@ static TCB *edf_siguiente_hilo(Scheduler *sched) {
 /* Inserta un hilo en READY y prregunta si su deadline es más temprano */
 /* ------------------------------------------------------------------ */
 static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
+
     /* Down-cast al tipo concreto */
     EDF_Scheduler *edf_scheduler = (EDF_Scheduler*)sched;
     /* Asocia este scheduler al hilo */
@@ -365,7 +366,10 @@ static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
 
     /* Si hay un hilo en ejecución y este nuevo tiene
        deadline más temprano, preempta inmediatamente */
+
+
     if (hilo_actual && (hilo->deadline < hilo_actual->deadline)) {
+
         /* Cede el control al scheduler */
         TCB *prev = hilo_actual;
 
@@ -381,6 +385,7 @@ static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
             swapcontext(&prev->context, &next->context);
         }
     }
+
 }
 
 

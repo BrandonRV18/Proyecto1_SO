@@ -11,6 +11,7 @@ extern TCB         *hilo_actual;
 extern int          next_tid;
 
 
+
 static void thread_trampoline(void (*funcion)(void*), void *arg) {
     funcion(arg);
     my_thread_end();
@@ -69,16 +70,11 @@ void my_thread_end(void) {
         actual->joiner->state = READY;
         encolar_hilo(actual->scheduler, actual->joiner);
     }
-    free(actual->stack);
 
-    if (actual->detached || actual->joiner == NULL) {
-        free(actual);
-        schedule();
-        abort();
-    }
     schedule();
-    abort();
 }
+
+
 
 //Funcion encargada de ceder voluntariamente la CPU
 void my_thread_yield(void) {

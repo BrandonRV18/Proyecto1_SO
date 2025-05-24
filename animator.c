@@ -3,19 +3,32 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <ncurses.h>
 #include <ucontext.h>
-#include "my_pthread.h"
-#include "scheduler.h"  // EDF_Scheduler, edf_scheduler_init, schedule(), hilo_actual
+#include <sys/time.h>
 
-// --- Parser manual de config.ini ---
+#include "my_pthread.h"
+#include "scheduler.h"
+
+
+#ifdef LINE_MAX
+#undef LINE_MAX
+#endif
 #define LINE_MAX 256
 #define INITIAL_SHAPE_CAP   4
 #define INITIAL_MONITOR_CAP 4
 #ifndef MAX
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 #endif
+
+static EDF_Scheduler     edf;
+static Lottery_Scheduler ls;
+static RR_Scheduler      rr;
+static long global_start_ms;
+
+
 
 typedef struct {
     char *name;
@@ -30,10 +43,10 @@ typedef struct {
     int   x_end,   y_end;
     int   rotation;
     int   start_time, end_time;
-    char  scheduler[32];
     int   tickets;
-    int   deadline;
     int   color_pair;
+    int   tid;
+    long  start_ms;
 } ShapeConfig;
 
 typedef struct {
@@ -111,9 +124,7 @@ Config *load_config(const char *path) {
                 else if (!strcmp(k, "rotation"))  cur->rotation   = atoi(v);
                 else if (!strcmp(k, "start_time")||!strcmp(k, "star_time")) cur->start_time = atoi(v);
                 else if (!strcmp(k, "end_time"))  cur->end_time   = atoi(v);
-                else if (!strcmp(k, "scheduler")) strncpy(cur->scheduler, v, sizeof(cur->scheduler)-1);
                 else if (!strcmp(k, "tickets"))   cur->tickets    = atoi(v);
-                else if (!strcmp(k, "deadline"))  cur->deadline   = atoi(v);
             }
         }
     }
@@ -271,6 +282,59 @@ static void free_position(my_mutex *mutex, int x, int y, int owner_tid) {
     }
 }
 
+static void draw_explosion(int cx, int cy) {
+    const int R = 3;
+    int max_y, max_x;
+
+    // 1) Bloqueamos el mutex para no interferir con otros hilos
+    my_mutex_lock(&canvas_mutex);
+
+    // 2) Obtenemos el tamaño actual de la ventana
+    getmaxyx(win, max_y, max_x);
+
+    // 3) Dibujamos los “asteriscos” de la explosión, radio a radio
+    for (int r = 1; r <= R; r++) {
+        // Líneas horizontales superior e inferior
+        for (int dx = -r; dx <= r; dx++) {
+            int row1 = cy + r + 1, col1 = cx + dx + 1;
+            int row2 = cy - r + 1, col2 = cx + dx + 1;
+
+            if (row1 >= 0 && row1 < max_y && col1 >= 0 && col1 < max_x)
+                mvwaddch(win, row1, col1, '*');
+            if (row2 >= 0 && row2 < max_y && col2 >= 0 && col2 < max_x)
+                mvwaddch(win, row2, col2, '*');
+        }
+        // Líneas verticales izquierda y derecha
+        for (int dy = -r; dy <= r; dy++) {
+            int row3 = cy + dy + 1, col3 = cx + r + 1;
+            int row4 = cy + dy + 1, col4 = cx - r + 1;
+
+            if (row3 >= 0 && row3 < max_y && col3 >= 0 && col3 < max_x)
+                mvwaddch(win, row3, col3, '*');
+            if (row4 >= 0 && row4 < max_y && col4 >= 0 && col4 < max_x)
+                mvwaddch(win, row4, col4, '*');
+        }
+
+        // Refrescamos y pausamos un poco para que se vea la animación
+        wrefresh(win);
+        napms(50);
+    }
+
+    // 4) Limpiamos la zona de la explosión
+    for (int dy = -R; dy <= R; dy++) {
+        for (int dx = -R; dx <= R; dx++) {
+            int row = cy + dy + 1, col = cx + dx + 1;
+            if (row >= 0 && row < max_y && col >= 0 && col < max_x)
+                mvwaddch(win, row, col, ' ');
+        }
+    }
+    wrefresh(win);
+
+    // 5) Desbloqueamos el mutex
+    my_mutex_unlock(&canvas_mutex);
+}
+
+
 void animate_shape(void *arg) {
     ShapeConfig *sh = (ShapeConfig*)arg;
     int dx    = sh->x_end   - sh->x_start;
@@ -319,6 +383,16 @@ void animate_shape(void *arg) {
 
 
     for (int i = 1; i <= steps; i++) {
+
+        struct timeval tv; gettimeofday(&tv, NULL);
+        long now_ms = tv.tv_sec*1000 + tv.tv_usec/1000;
+        if (now_ms - sh->start_ms >= sh->end_time) {
+
+            draw_explosion(prev_x + rot_w_prev/2,
+                           prev_y + rot_h_prev/2);
+            break;
+        }
+
 
         float progress = (float)i / steps;
         int x = sh->x_start + (int)(dx * progress);
@@ -404,7 +478,7 @@ void animate_shape(void *arg) {
         my_mutex_unlock(&canvas_mutex);
 
         napms(100);
-        my_thread_yield();
+
     }
 
 
@@ -436,7 +510,10 @@ void animate_shape(void *arg) {
 }
 
 
+
 int main(int argc, char *argv[]) {
+
+
     if (argc < 2) {
         fprintf(stderr, "Uso: %s config.ini\n", argv[0]);
         return 1;
@@ -467,7 +544,6 @@ int main(int argc, char *argv[]) {
     };
     int n_colors = sizeof(basic_colors)/sizeof(*basic_colors);
 
-
     for (int i = 0; i < global_cfg->shape_count; i++) {
         int pair = i + 1;  // los pares empiezan en 1
         int fg = basic_colors[i % n_colors];
@@ -476,36 +552,54 @@ int main(int argc, char *argv[]) {
     }
 
 
+    init_pair(10, COLOR_CYAN, COLOR_BLACK);
+
+
     win = newwin(global_cfg->height, global_cfg->width, 0, 0);
+
+
+    wattron(win, COLOR_PAIR(10));
+    box(win, 0, 0);
+    wattroff(win, COLOR_PAIR(10));
+    wrefresh(win);
     my_mutex_init(&canvas_mutex);
 
 
-    RR_Scheduler rr;
     const int QUANTUM_MS = 100;
+    edf_scheduler_init(&edf);
+    lottery_scheduler_init(&ls, QUANTUM_MS);
     rr_scheduler_init(&rr, QUANTUM_MS);
-    Scheduler *sched = (Scheduler*)&rr;
+
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    global_start_ms = tv.tv_sec*1000 + tv.tv_usec/1000;
 
 
     for (int i = 0; i < global_cfg->shape_count; i++) {
         ShapeConfig *sh = &global_cfg->shapes[i];
+
         my_thread_create(
             animate_shape,
             sh,
-            sched,
+            (Scheduler*)&rr,
             sh->tickets,
             0,
-            sh->deadline
+            sh->end_time
         );
+        sh->start_ms = global_start_ms;
     }
+
+
 
 
     ucontext_t main_ctx;
     getcontext(&main_ctx);
-    TCB *first = sched->siguiente_hilo(sched);
-    if (first) {
-        hilo_actual = first;
-        swapcontext(&main_ctx, &first->context);
-    }
+    TCB *first = rr.base.siguiente_hilo((Scheduler*)&rr);
+
+
+    hilo_actual = first;
+    swapcontext(&main_ctx, &hilo_actual->context);
 
 
     getch();
