@@ -6,15 +6,34 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>   // setitimer, struct itimerval
+#include <string.h>
 
 
 #define STACK_SIZE  (1024 * 64)  // Tamaño de pila: 64 KB
 #define QUANTUM_MS   100         // Quantum de 100 milisegundos
+#define MAX_SNAPSHOTS 10000
+static char *rr_snapshots[MAX_SNAPSHOTS];
+static int   rr_snapshot_count = 0;
+int scheduler_activo = 0;
 
 ThreadPool   global_thread_pool = { 0, NULL, 0, 0 };
 TCB         *hilo_actual        = NULL;
 int          next_tid           = 0;
 ucontext_t   scheduler_ctx;
+
+
+int threadpool_alive_count(void) {
+    int cnt = 0;
+    for (size_t i = 0; i < global_thread_pool.count; ++i) {
+        TCB *t = global_thread_pool.threads[i];
+        if (t && t->state != TERMINATED) {
+            ++cnt;
+        }
+    }
+    return cnt;
+}
+
+
 
 
 static void ensure_capacity(ThreadPool *pool) {
@@ -73,13 +92,25 @@ int my_thread_chsched(TCB *hilo, Scheduler *new_sch) {
 
 
 void schedule(void) {
-    if (hilo_actual == NULL) return;
+    if (hilo_actual == NULL) {
+        return;
+    }
+
+
     TCB *prev      = hilo_actual;
     Scheduler *sch = prev->scheduler;
+
+
     TCB *next      = sch->siguiente_hilo(sch);
-    if (next == NULL || next == prev) return;
+
+    if (next == NULL) {
+
+        return;
+    }
     hilo_actual = next;
+
     swapcontext(&prev->context, &next->context);
+
 }
 
 
@@ -92,8 +123,9 @@ static void start_preemption(int quantum_ms) {
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
     sa.sa_handler = alarm_handler;
-    sa.sa_flags   = SA_RESTART;
+    sa.sa_flags   = 0;
     sigaction(SIGALRM, &sa, NULL);
+
 
     struct itimerval timer = {
         .it_interval = { .tv_sec = quantum_ms/1000,
@@ -105,8 +137,12 @@ static void start_preemption(int quantum_ms) {
 }
 
 
+
+
 static void rr_encolar_hilo(Scheduler *sched, TCB *hilo) {
+
     RR_Scheduler *rr = (RR_Scheduler*)sched;
+
     hilo->scheduler     = sched;
     hilo->state         = READY;
     hilo->next          = NULL;
@@ -117,27 +153,47 @@ static void rr_encolar_hilo(Scheduler *sched, TCB *hilo) {
         rr->tail->next = hilo;
     }
     rr->tail = hilo;
+
+
 }
+
 
 static TCB *rr_siguiente_hilo(Scheduler *sched) {
     RR_Scheduler *rr = (RR_Scheduler*)sched;
-    if (rr->head == NULL) {
+
+    // 1) Limpia del frente todos los hilos TERMINATED
+    while (rr->head && rr->head->state == TERMINATED) {
+        TCB *dead = rr->head;
+        rr->head = dead->next;
+        if (dead == rr->tail) {
+            rr->tail = NULL;
+        }
+        dead->next = NULL;
+    }
+
+    // 2) Si ya no queda nadie, devolvemos NULL
+    if (!rr->head) {
         return NULL;
     }
+
+    // 3) Sacamos el primero de la lista...
     TCB *chosen = rr->head;
     rr->head    = chosen->next;
-    if (rr->head == NULL) {
+    if (!rr->head) {
         rr->tail = NULL;
     }
-    chosen->next  = NULL;
-    chosen->state = RUNNING;
-    if (rr->tail == NULL) {
-        rr->head = chosen;
+    chosen->next = NULL;
+
+    // 4) Si sigue READY (no terminó), lo reencolamos al final
+    if (chosen->state == READY) {
+        if (rr->tail) {
+            rr->tail->next = chosen;
+        } else {
+            rr->head = chosen;
+        }
+        rr->tail = chosen;
     }
-    else {
-        rr->tail->next = chosen;
-    }
-    rr->tail = chosen;
+
     return chosen;
 }
 
@@ -173,7 +229,10 @@ void rr_scheduler_init(RR_Scheduler *rr, int quantum_ms) {
     rr->base.remover_hilo    = rr_remover_hilo;
     rr->quantum             = quantum_ms;
     rr->head = rr->tail     = NULL;
+    scheduler_activo = 1;
     start_preemption(quantum_ms);
+
+
 }
 
 
@@ -204,6 +263,8 @@ static void lottery_encolar_hilo(Scheduler *sched, TCB *hilo) {
     hilo->scheduler = sched;
     hilo->state     = READY;
     hilo->next      = NULL;
+    ;
+
     if (ls->head == NULL) {
         ls->head = hilo;
     } else {
@@ -302,6 +363,7 @@ void lottery_scheduler_init(Lottery_Scheduler *ls, int quantum_ms) {
     ls->base.remover_hilo    = lottery_remover_hilo;
     ls->head                = NULL;
     ls->quantum             = quantum_ms;
+    scheduler_activo = 2;
     start_preemption(quantum_ms);
     srand((unsigned)time(NULL));
 }
@@ -338,10 +400,11 @@ static TCB *edf_siguiente_hilo(Scheduler *sched) {
     /* Marca el ganador como en ejecución */
     mejor->state = RUNNING;
     /* Devuelve el TCB seleccionado */
+
     return mejor;
 }
 /* ------------------------------------------------------------------ */
-/* Inserta un hilo en READY y prregunta si su deadline es más temprano */
+/* Inserta un hilo en READY y pregunta si su deadline es más temprano */
 /* ------------------------------------------------------------------ */
 static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
 
@@ -353,6 +416,7 @@ static void edf_encolar_hilo(Scheduler *sched, TCB *hilo) {
     hilo->state     = READY;
     /* Rompe enlaces previos */
     hilo->next      = NULL;
+
 
     /* Inserta al final de la lista enlazada */
     if (!edf_scheduler->head) {
@@ -417,6 +481,7 @@ void edf_scheduler_init(EDF_Scheduler *edf_scheduler) {
     edf_scheduler->base.siguiente_hilo = edf_siguiente_hilo;
     edf_scheduler->base.remover_hilo    = edf_remover_hilo;
     edf_scheduler->head                = NULL;
+    scheduler_activo = 0;
 }
 
 static TCB hilo_nuevo;

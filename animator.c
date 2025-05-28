@@ -6,13 +6,16 @@
 #include <limits.h>
 #include <math.h>
 #include <ncurses.h>
+#include <signal.h>
+#include <time.h>
 #include <ucontext.h>
 #include <sys/time.h>
-
 #include "my_pthread.h"
 #include "scheduler.h"
+#include <x86intrin.h>
+#include <stdint.h>
 
-
+#define CPU_HZ 2800000000UL
 #ifdef LINE_MAX
 #undef LINE_MAX
 #endif
@@ -27,6 +30,7 @@ static EDF_Scheduler     edf;
 static Lottery_Scheduler ls;
 static RR_Scheduler      rr;
 static long global_start_ms;
+static int QUANTUM_MS = 100;
 
 
 
@@ -281,6 +285,26 @@ static void free_position(my_mutex *mutex, int x, int y, int owner_tid) {
         ptr = &(*ptr)->next;
     }
 }
+static inline uint64_t rdtsc_counter(void) {
+    return __rdtsc();
+}
+
+void custom_napms(uint64_t ms) {
+    uint64_t start          = rdtsc_counter();
+    uint64_t target         = start + (CPU_HZ / 1000ULL) * ms;
+    uint64_t last_yield_ts  = start;
+    uint64_t yield_interval = (CPU_HZ / 1000ULL) * 5;  // cede cada 5 ms
+
+    while (rdtsc_counter() < target) {
+        uint64_t now = rdtsc_counter();
+        if (now - last_yield_ts >= yield_interval) {
+            last_yield_ts = now;
+            if (threadpool_alive_count() > 1) my_thread_yield();
+        }
+        // si no toca yield, puro spin en usuario
+    }
+}
+
 
 static void draw_explosion(int cx, int cy) {
     const int R = 3;
@@ -317,7 +341,11 @@ static void draw_explosion(int cx, int cy) {
 
         // Refrescamos y pausamos un poco para que se vea la animación
         wrefresh(win);
-        napms(50);
+
+        if (scheduler_activo != 1) napms(50);
+        else ;
+
+
     }
 
     // 4) Limpiamos la zona de la explosión
@@ -328,9 +356,9 @@ static void draw_explosion(int cx, int cy) {
                 mvwaddch(win, row, col, ' ');
         }
     }
+
     wrefresh(win);
 
-    // 5) Desbloqueamos el mutex
     my_mutex_unlock(&canvas_mutex);
 }
 
@@ -340,8 +368,7 @@ void animate_shape(void *arg) {
     int dx    = sh->x_end   - sh->x_start;
     int dy    = sh->y_end   - sh->y_start;
     int steps = (int)(sqrt(dx*dx + dy*dy));
-    int prev_x = sh->x_start, prev_y = sh->y_start;
-    int current_tid = hilo_actual->tid;
+
 
 
     int orig_h = sh->line_count;
@@ -350,15 +377,33 @@ void animate_shape(void *arg) {
         orig_w = MAX(orig_w, (int)strlen(sh->shape_lines[k]));
     }
 
-    // Ángulo acumulado de rotación
+    struct timeval tv0;
+    gettimeofday(&tv0, NULL);
+    long thread_start_ms = tv0.tv_sec*1000 + tv0.tv_usec/1000;
+
+
+    while (1) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        long now = tv.tv_sec*1000 + tv.tv_usec/1000;
+        if (now - thread_start_ms >= sh->start_time) break;
+        if (scheduler_activo != 1) napms(10);
+        else custom_napms(10);
+
+    }
+
+
+    long deadline_ms = thread_start_ms + sh->start_time + sh->end_time;
+
+    int prev_x = sh->x_start, prev_y = sh->y_start;
     int angle_current = 0;
-
-
     int rot_h_prev, rot_w_prev;
     char **rotated_prev = rotate_ascii(
         sh->shape_lines, orig_h, orig_w,
         angle_current, &rot_h_prev, &rot_w_prev
     );
+
+    int current_tid = hilo_actual->tid;
 
 
     my_mutex_lock(&canvas_mutex);
@@ -384,9 +429,10 @@ void animate_shape(void *arg) {
 
     for (int i = 1; i <= steps; i++) {
 
-        struct timeval tv; gettimeofday(&tv, NULL);
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
         long now_ms = tv.tv_sec*1000 + tv.tv_usec/1000;
-        if (now_ms - sh->start_ms >= sh->end_time) {
+        if (now_ms >= deadline_ms) {
 
             draw_explosion(prev_x + rot_w_prev/2,
                            prev_y + rot_h_prev/2);
@@ -477,7 +523,10 @@ void animate_shape(void *arg) {
         }
         my_mutex_unlock(&canvas_mutex);
 
-        napms(100);
+        if (scheduler_activo != 1) napms(100);
+        else custom_napms(100);
+
+
 
     }
 
@@ -507,12 +556,17 @@ void animate_shape(void *arg) {
     free(rotated_prev);
 
     my_thread_end();
+
 }
 
 
 
 int main(int argc, char *argv[]) {
 
+    if (getcontext(&scheduler_ctx) == -1) {
+        perror("getcontext scheduler");
+        return 1;
+    }
 
     if (argc < 2) {
         fprintf(stderr, "Uso: %s config.ini\n", argv[0]);
@@ -529,11 +583,6 @@ int main(int argc, char *argv[]) {
 
     initscr(); cbreak(); noecho();
 
-    if (!has_colors()) {
-        endwin();
-        fprintf(stderr, "Tu terminal no soporta colores.\n");
-        return 1;
-    }
     start_color();
 
 
@@ -565,10 +614,10 @@ int main(int argc, char *argv[]) {
     my_mutex_init(&canvas_mutex);
 
 
-    const int QUANTUM_MS = 100;
+
     edf_scheduler_init(&edf);
-    lottery_scheduler_init(&ls, QUANTUM_MS);
-    rr_scheduler_init(&rr, QUANTUM_MS);
+    //lottery_scheduler_init(&ls, QUANTUM_MS);
+    //rr_scheduler_init(&rr, QUANTUM_MS);
 
 
     struct timeval tv;
@@ -582,7 +631,7 @@ int main(int argc, char *argv[]) {
         my_thread_create(
             animate_shape,
             sh,
-            (Scheduler*)&rr,
+            (Scheduler*)&edf,
             sh->tickets,
             0,
             sh->end_time
@@ -593,17 +642,20 @@ int main(int argc, char *argv[]) {
 
 
 
-    ucontext_t main_ctx;
-    getcontext(&main_ctx);
-    TCB *first = rr.base.siguiente_hilo((Scheduler*)&rr);
+    TCB *first = edf.base.siguiente_hilo((Scheduler*)&edf);
 
 
     hilo_actual = first;
-    swapcontext(&main_ctx, &hilo_actual->context);
+    swapcontext(&scheduler_ctx, &hilo_actual->context);
+
 
 
     getch();
+
+
     endwin();
+
+
     return 0;
 
 }

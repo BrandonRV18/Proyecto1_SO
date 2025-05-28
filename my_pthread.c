@@ -3,12 +3,17 @@
 #include <ucontext.h>
 #include <stdlib.h>
 #include "my_pthread.h"
+
+
+
+#include <stdio.h>
 #define STACK_SIZE (64 * 1024)
 
 extern ucontext_t scheduler_ctx;
 extern ThreadPool   global_thread_pool;
 extern TCB         *hilo_actual;
 extern int          next_tid;
+
 
 
 
@@ -42,10 +47,9 @@ int my_thread_create(
     hilo->context.uc_stack.ss_sp = hilo->stack;
     hilo->context.uc_stack.ss_size = STACK_SIZE;
     hilo->context.uc_link = &scheduler_ctx;
-
     makecontext(&hilo->context,
-                (void(*)(void))thread_trampoline,
-                2, funcion, arg);
+            (void(*)(void))thread_trampoline,
+            2, funcion, arg);
 
     hilo->tid = next_tid++;
     hilo->state = READY;
@@ -59,18 +63,18 @@ int my_thread_create(
 
     registrar_hilo(&global_thread_pool, hilo);
     encolar_hilo(sched, hilo);
+
+
+
     return hilo->tid;
 }
+
+
+
 
 void my_thread_end(void) {
     TCB *actual = hilo_actual;
     actual->state = TERMINATED;
-
-    if (actual->joiner) {
-        actual->joiner->state = READY;
-        encolar_hilo(actual->scheduler, actual->joiner);
-    }
-
     schedule();
 }
 
