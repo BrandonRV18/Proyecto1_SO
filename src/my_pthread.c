@@ -75,6 +75,12 @@ int my_thread_create(
 void my_thread_end(void) {
     TCB *actual = hilo_actual;
     actual->state = TERMINATED;
+
+    if (actual->joiner) {
+        actual->joiner->state = READY;
+        encolar_hilo(actual->scheduler, actual->joiner);
+    }
+
     schedule();
 }
 
@@ -92,7 +98,8 @@ void my_thread_yield(void) {
 void my_thread_join(int tid) {
     TCB *actual = hilo_actual;
     TCB *hilo_prioritario = buscar_hilo_id(&global_thread_pool, tid);
-    if (hilo_prioritario == NULL || hilo_prioritario->state == TERMINATED || hilo_prioritario == actual) return;
+    if (hilo_prioritario == NULL || hilo_prioritario->state == TERMINATED || hilo_prioritario == actual ||
+        hilo_prioritario->detached) return;
     actual->state = BLOCKED;
     hilo_prioritario->joiner = actual;
     schedule();
