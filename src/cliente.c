@@ -14,6 +14,41 @@
 
 
 
+/**
+ * main
+ *
+ * Inicia la conexión con un servidor remoto para recibir comandos de dibujo y
+ * los despliega en una ventana ncurses con la región asignada. El cliente:
+ *   1) Valida argumentos (IP del servidor y puerto).
+ *   2) Crea un socket TCP y se conecta al servidor.
+ *   3) Espera a recibir la primera línea "REGION x_off w h" para calcular
+ *      dimensiones y desplazamiento local.
+ *   4) Inicializa ncurses y crea una ventana de tamaño h×w para dibujar,
+ *      aplicando un borde (box).
+ *   5) En un bucle infinito, lee líneas de comandos del servidor:
+ *        - "CLEAR": borra la ventana y vuelve a dibujar el borde.
+ *        - "DRAW gx gy ch color_pair": traduce coordenadas globales (gx, gy)
+ *           a coordenadas locales (restando x_off) y dibuja el carácter 'ch'
+ *           con el par de colores indicado.
+ *           Si 'ch' == 'a', dibuja un espacio coloreado (para borrar píxeles).
+ *        - "REFRESH": refresca la ventana para mostrar cambios acumulados.
+ *        - "END": muestra un mensaje de finalización, espera una tecla y sale.
+ *      Cada línea se procesa cuando se detecta '\n'; caracteres intermedios
+ *      se acumulan en `line_buf`.
+ *   6) Al desconectarse el servidor o recibir "END", cierra ncurses y termina.
+ *
+ * Entradas:
+ *   argc, argv:
+ *     argc debe ser 3 (nombre_del_programa, IP_Servidor, Puerto);
+ *     argv[1] = dirección IP del servidor (formato IPv4).
+ *     argv[2] = número de puerto (cadena que se convierte a int).
+ *
+ * Retorna:
+ *   int – 0 si la ejecución finaliza correctamente, 1 en caso de error:
+ *         - Error al crear socket, convertir IP, conectar al servidor.
+ *         - No recepción de "REGION" o mal formato de la misma.
+ *         - Error al crear ventana ncurses.
+ */
 int main(int argc, char **argv) {
     if (argc != 3) {
         fprintf(stderr, "Uso: %s <IP_Servidor> <Puerto>\n", argv[0]);

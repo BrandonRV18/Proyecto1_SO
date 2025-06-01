@@ -4,6 +4,20 @@
 #include <string.h>
 #include <ctype.h>
 
+
+/**
+ * QuitarEspacios
+ *
+ * Elimina espacios en blanco al inicio y al final de la cadena apuntada por 'inicio'.
+ *
+ * Entradas:
+ *   inicio – puntero a la cadena que puede contener espacios en blanco al inicio o final.
+ *
+ * Retorna:
+ *   char* – puntero al primer carácter no-espacio de la cadena original, con un '\0' colocado
+ *           justo después del último carácter no-espacio. Si toda la cadena era espacios,
+ *           retorna el puntero al '\0' final.
+ */
 static char* QuitarEspacios(char *inicio) {
 
     while (isspace((unsigned char)*inicio)) {
@@ -22,6 +36,20 @@ static char* QuitarEspacios(char *inicio) {
 }
 
 
+/**
+ * config_create
+ *
+ * Reserva e inicializa un nuevo Parser en memoria. Establece valores por defecto para
+ * width, height, monitor_capacity, shape_capacity, y crea los arreglos iniciales para monitores
+ * y formas.
+ *
+ * Entradas:
+ *   ninguna
+ *
+ * Retorna:
+ *   Parser* – puntero a la estructura Parser recién creada con campos inicializados.
+ *             Si falla malloc, el comportamiento es indefinido.
+ */
 Parser* config_create(void) {
     Parser *cfg = malloc(sizeof(*cfg));
     cfg->width = 0;
@@ -35,6 +63,18 @@ Parser* config_create(void) {
     return cfg;
 }
 
+/**
+ * config_destroy
+ *
+ * Libera toda la memoria asociada a un Parser: libera cada cadena de monitores, el arreglo
+ * de monitores, y finalmente la estructura Parser misma.
+ *
+ * Entradas:
+ *   cfg – puntero a la estructura Parser a liberar.
+ *
+ * Retorna:
+ *   void
+ */
 void config_destroy(Parser *cfg) {
     for (int i = 0; i < cfg->monitor_count; i++)
         free(cfg->monitors[i]);
@@ -42,6 +82,21 @@ void config_destroy(Parser *cfg) {
     free(cfg);
 }
 
+
+/**
+ * add_shape
+ *
+ * Agrega una nueva entrada ShapeConfig al arreglo dinámico de shapes dentro de Parser.
+ * Si el arreglo está lleno, se duplica su capacidad reallocando memoria. Inicializa
+ * el ShapeConfig a cero y establece su campo 'name' como una copia de la sección dada.
+ *
+ * Entradas:
+ *   cfg     – puntero a Parser que contiene el arreglo de ShapeConfig.
+ *   section – cadena con el nombre de la sección (usada para strdup en el campo name).
+ *
+ * Retorna:
+ *   ShapeConfig* – puntero a la nueva entrada ShapeConfig dentro del arreglo 'cfg->shapes'.
+ */
 static ShapeConfig *add_shape(Parser *cfg, const char *section) {
     if (cfg->shape_count >= cfg->shape_capacity) {
         cfg->shape_capacity *= 2;
@@ -53,10 +108,62 @@ static ShapeConfig *add_shape(Parser *cfg, const char *section) {
     cfg->shape_count++;
     return sh;
 }
+
+/**
+ * ltrim
+ *
+ * Elimina espacios en blanco al inicio de la cadena 's'. No modifica espacios finales.
+ *
+ * Entradas:
+ *   s – cadena a la que se le eliminarán los espacios en blanco a la izquierda.
+ *
+ * Retorna:
+ *   char* – puntero a la primera posición no-espacio dentro de 's'.
+ */
 static char *ltrim(char *s) { while (isspace((unsigned char)*s)) s++; return s; }
+
+/**
+ * rtrim
+ *
+ * Elimina espacios en blanco al final de la cadena 's'. No modifica espacios iniciales.
+ *
+ * Entradas:
+ *   s – cadena a la que se le eliminarán los espacios en blanco a la derecha.
+ *
+ * Retorna:
+ *   char* – mismo puntero 's', con todos los espacios finales convertidos en '\0'.
+ */
 static char *rtrim(char *s) { char *e = s + strlen(s) - 1; while (e >= s && isspace((unsigned char)*e)) *e-- = '\0'; return s; }
+
+/**
+ * trim
+ *
+ * Elimina espacios en blanco al inicio y al final de la cadena 's'.
+ *
+ * Entradas:
+ *   s – cadena a la que se le eliminarán los espacios en blanco en ambos extremos.
+ *
+ * Retorna:
+ *   char* – puntero al primer carácter no-espacio (después de ltrim), y con '\0' colocado
+ *           tras el último carácter no-espacio (por efecto de rtrim).
+ */
 static char *trim(char *s)  { return rtrim(ltrim(s)); }
 
+
+/**
+ * load_config
+ *
+ * Carga un archivo de configuración en formato INI y lo parsea para llenar un Parser.
+ * Crea secciones para Canvas, Monitors y cada forma definida. Cada sección puede contener
+ * múltiples claves y valores. Los valores se convierten a tipos adecuados (int, char*).
+ *
+ * Entradas:
+ *   filename – nombre del archivo de configuración a cargar.
+ *
+ * Retorna:
+ *   Parser* – puntero al Parser lleno con la configuración del archivo. Si falla al abrir
+ *             el archivo, retorna NULL.
+ */
 Parser* load_config(const char *filename) {
     FILE *f = fopen(filename, "r");
     if (!f) return NULL;
@@ -170,6 +277,20 @@ Parser* load_config(const char *filename) {
     return cfg;
 }
 
+
+/**
+ * load_shapes_content
+ *
+ * Lee cada archivo de forma referenciado en 'cfg->shapes[i].shape_file' y carga sus líneas
+ * en memoria dentro de 'sh->shape_lines'. Si el número de líneas excede la capacidad actual,
+ * duplica el arreglo usando realloc. Cada línea se guarda sin el carácter '\n'.
+ *
+ * Entradas:
+ *   cfg – puntero al Parser que contiene al menos 'shape_count' ShapeConfig con 'shape_file' válido.
+ *
+ * Retorna:
+ *   void
+ */
 void load_shapes_content(Parser *cfg) {
 
     for (int i = 0; i < cfg->shape_count; i++) {
