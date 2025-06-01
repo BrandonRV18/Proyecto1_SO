@@ -109,46 +109,6 @@ static ShapeConfig *add_shape(Parser *cfg, const char *section) {
     return sh;
 }
 
-/**
- * ltrim
- *
- * Elimina espacios en blanco al inicio de la cadena 's'. No modifica espacios finales.
- *
- * Entradas:
- *   s – cadena a la que se le eliminarán los espacios en blanco a la izquierda.
- *
- * Retorna:
- *   char* – puntero a la primera posición no-espacio dentro de 's'.
- */
-static char *ltrim(char *s) { while (isspace((unsigned char)*s)) s++; return s; }
-
-/**
- * rtrim
- *
- * Elimina espacios en blanco al final de la cadena 's'. No modifica espacios iniciales.
- *
- * Entradas:
- *   s – cadena a la que se le eliminarán los espacios en blanco a la derecha.
- *
- * Retorna:
- *   char* – mismo puntero 's', con todos los espacios finales convertidos en '\0'.
- */
-static char *rtrim(char *s) { char *e = s + strlen(s) - 1; while (e >= s && isspace((unsigned char)*e)) *e-- = '\0'; return s; }
-
-/**
- * trim
- *
- * Elimina espacios en blanco al inicio y al final de la cadena 's'.
- *
- * Entradas:
- *   s – cadena a la que se le eliminarán los espacios en blanco en ambos extremos.
- *
- * Retorna:
- *   char* – puntero al primer carácter no-espacio (después de ltrim), y con '\0' colocado
- *           tras el último carácter no-espacio (por efecto de rtrim).
- */
-static char *trim(char *s)  { return rtrim(ltrim(s)); }
-
 
 /**
  * load_config
@@ -226,7 +186,7 @@ Parser* load_config(const char *filename) {
                                 sizeof(char*) * cfg->monitor_capacity
                             );
                         }
-                        cfg->monitors[cfg->monitor_count++] = strdup(trim(token));
+                        cfg->monitors[cfg->monitor_count++] = strdup(QuitarEspacios(token));
                         token = strtok(NULL, ",");
                     }
                 }

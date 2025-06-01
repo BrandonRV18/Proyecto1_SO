@@ -1,6 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,9 +11,6 @@
 #include <sys/time.h>
 #include <x86intrin.h>
 #include <ncurses.h>
-
-
-
 #include "../include/parser.h"
 #include "../include/my_pthread.h"
 #ifndef MAX
@@ -608,8 +603,6 @@ void animate_shape_server(void *arg) {
 
     for (int k = 0; k < rot_h_prev; k++) free(rotated_prev[k]);
     free(rotated_prev);
-
-
 
     my_thread_end();
 }
