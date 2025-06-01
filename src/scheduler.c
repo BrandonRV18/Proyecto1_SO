@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "scheduler.h"
+#include "../include/scheduler.h"
 #include <stdlib.h>     // malloc, free, realloc
 #include <signal.h>     // sigaction
 #include <stdio.h>
@@ -263,7 +263,6 @@ static void lottery_encolar_hilo(Scheduler *sched, TCB *hilo) {
     hilo->scheduler = sched;
     hilo->state     = READY;
     hilo->next      = NULL;
-    ;
 
     if (ls->head == NULL) {
         ls->head = hilo;

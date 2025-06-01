@@ -2,7 +2,7 @@
 
 #include <ucontext.h>
 #include <stdlib.h>
-#include "my_pthread.h"
+#include "../include/my_pthread.h"
 
 
 

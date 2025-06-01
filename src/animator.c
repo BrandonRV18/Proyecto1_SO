@@ -10,8 +10,8 @@
 #include <time.h>
 #include <ucontext.h>
 #include <sys/time.h>
-#include "my_pthread.h"
-#include "scheduler.h"
+#include "../include/my_pthread.h"
+#include "../include/scheduler.h"
 #include <x86intrin.h>
 #include <stdint.h>
 
@@ -578,7 +578,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     load_shapes_content(global_cfg);
-
 
 
     initscr(); cbreak(); noecho();
