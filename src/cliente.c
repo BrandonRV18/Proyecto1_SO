@@ -138,17 +138,17 @@ int main(int argc, char **argv) {
     int line_len = 0;
 
     while (1) {
-        ssize_t r = recv(sock, recv_buf, sizeof(recv_buf)-1, 0);
-        if (r <= 0) {
+        ssize_t receive = recv(sock, recv_buf, sizeof(recv_buf)-1, 0);
+        if (receive <= 0) {
 
             mvwprintw(win, 1, 1, "Desconectado del servidor.");
             wrefresh(win);
             break;
         }
-        recv_buf[r] = '\0';
+        recv_buf[receive] = '\0';
 
 
-        for (int i = 0; i < r; i++) {
+        for (int i = 0; i < receive; i++) {
             char c = recv_buf[i];
             if (c == '\n') {
 

@@ -104,8 +104,8 @@ static void send_refresh(int sock) {
  *
  * Entradas:
  *   lines    – arreglo de cadenas que representan las líneas ASCII originales.
- *   h        – número de líneas (altura) de la forma original.
- *   w        – ancho máximo (número de columnas) de la forma original.
+ *   height        – número de líneas (altura) de la forma original.
+ *   width        – ancho máximo (número de columnas) de la forma original.
  *   rotation – ángulo de rotación en grados (0, 90, 180 o 270). Cualquier otro valor
  *              retorna la forma sin rotar.
  *   out_h    – puntero a entero donde se guardará la nueva altura tras rotar.
@@ -115,62 +115,62 @@ static void send_refresh(int sock) {
  *   char** – matriz dinámica de cadenas (cada una terminada en '\0') con la forma rotada.
  *
  */
-char **rotate_ascii(char **lines, int h, int w,
+char **rotate_ascii(char **lines, int height, int width,
                     int rotation, int *out_h, int *out_w)
 {
 
-    char **grid = malloc(sizeof(char*) * h);
-    for (int i = 0; i < h; i++) {
-        grid[i] = malloc(w+1);
+    char **grid = malloc(sizeof(char*) * height);
+    for (int i = 0; i < height; i++) {
+        grid[i] = malloc(width+1);
         int len = strlen(lines[i]);
         memcpy(grid[i], lines[i], len);
-        memset(grid[i] + len, ' ', w - len);
-        grid[i][w] = '\0';
+        memset(grid[i] + len, ' ', width - len);
+        grid[i][width] = '\0';
     }
 
     char **res;
     switch (rotation) {
         case   0:
-            *out_h = h; *out_w = w;
-            res = malloc(sizeof(char*) * h);
-            for (int i = 0; i < h; i++) {
+            *out_h = height; *out_w = width;
+            res = malloc(sizeof(char*) * height);
+            for (int i = 0; i < height; i++) {
                 res[i] = strdup(grid[i]);
             }
             break;
 
         case  90:
-            *out_h = w; *out_w = h;
+            *out_h = width; *out_w = height;
             res = malloc(sizeof(char*) * (*out_h));
             for (int i = 0; i < *out_h; i++) {
                 res[i] = malloc(*out_w+1);
                 for (int j = 0; j < *out_w; j++) {
 
-                    res[i][j] = grid[h-1-j][i];
+                    res[i][j] = grid[height-1-j][i];
                 }
                 res[i][*out_w] = '\0';
             }
             break;
 
         case 180:
-            *out_h = h; *out_w = w;
-            res = malloc(sizeof(char*) * h);
-            for (int i = 0; i < h; i++) {
-                res[i] = malloc(w+1);
-                for (int j = 0; j < w; j++) {
-                    res[i][j] = grid[h-1-i][w-1-j];
+            *out_h = height; *out_w = width;
+            res = malloc(sizeof(char*) * height);
+            for (int i = 0; i < height; i++) {
+                res[i] = malloc(width+1);
+                for (int j = 0; j < width; j++) {
+                    res[i][j] = grid[height-1-i][width-1-j];
                 }
-                res[i][w] = '\0';
+                res[i][width] = '\0';
             }
             break;
 
         case 270:
-            *out_h = w; *out_w = h;
+            *out_h = width; *out_w = height;
             res = malloc(sizeof(char*) * (*out_h));
             for (int i = 0; i < *out_h; i++) {
                 res[i] = malloc(*out_w+1);
                 for (int j = 0; j < *out_w; j++) {
 
-                    res[i][j] = grid[j][w-1-i];
+                    res[i][j] = grid[j][width-1-i];
                 }
                 res[i][*out_w] = '\0';
             }
@@ -178,16 +178,16 @@ char **rotate_ascii(char **lines, int h, int w,
 
         default:
 
-            *out_h = h; *out_w = w;
-            res = malloc(sizeof(char*) * h);
-            for (int i = 0; i < h; i++) {
+            *out_h = height; *out_w = width;
+            res = malloc(sizeof(char*) * height);
+            for (int i = 0; i < height; i++) {
                 res[i] = strdup(grid[i]);
             }
             break;
     }
 
 
-    for (int i = 0; i < h; i++) free(grid[i]);
+    for (int i = 0; i < height; i++) free(grid[i]);
     free(grid);
     return res;
 }
@@ -460,11 +460,11 @@ void animate_shape_server(void *arg) {
 
     int prev_x = sh->x_start;
     int prev_y = sh->y_start;
-    int angle_current = 0;
+    int current_angle = 0;
     int rot_h_prev, rot_w_prev;
     char **rotated_prev = rotate_ascii(
         sh->shape_lines, orig_h, orig_w,
-        angle_current, &rot_h_prev, &rot_w_prev
+        current_angle, &rot_h_prev, &rot_w_prev
     );
 
 
@@ -488,21 +488,21 @@ void animate_shape_server(void *arg) {
         int y_global = sh->y_start + (int)(dy * progress);
 
 
-        angle_current = (angle_current + sh->rotation) % 360;
+        current_angle = (current_angle + sh->rotation) % 360;
         int rot_h, rot_w;
         char **rotated = rotate_ascii(
             sh->shape_lines, orig_h, orig_w,
-            angle_current, &rot_h, &rot_w
+            current_angle, &rot_h, &rot_w
         );
 
 
         int can_move = 1;
         my_mutex_lock(&canvas_mutex);
-        for (int ly = 0; ly < rot_h && can_move; ly++) {
-            for (int lx = 0; lx < rot_w; lx++) {
-                if (rotated[ly][lx] != ' ') {
-                    int xx = x_global + lx;
-                    int yy = y_global + ly;
+        for (int row = 0; row < rot_h && can_move; row++) {
+            for (int col = 0; col < rot_w; col++) {
+                if (rotated[row][col] != ' ') {
+                    int xx = x_global + col;
+                    int yy = y_global + row;
                     if (is_position_occupied(&canvas_mutex, xx, yy, current_tid)) {
                         can_move = 0;
                         break;
@@ -513,11 +513,11 @@ void animate_shape_server(void *arg) {
 
         if (can_move) {
 
-            for (int ly = 0; ly < rot_h_prev; ly++) {
-                for (int lx = 0; lx < rot_w_prev; lx++) {
-                    if (rotated_prev[ly][lx] != ' ') {
-                        int xx_old = prev_x + lx;
-                        int yy_old = prev_y + ly;
+            for (int row = 0; row < rot_h_prev; row++) {
+                for (int col = 0; col < rot_w_prev; col++) {
+                    if (rotated_prev[row][col] != ' ') {
+                        int xx_old = prev_x + col;
+                        int yy_old = prev_y + row;
 
                         free_position(&canvas_mutex, xx_old, yy_old, current_tid);
 
@@ -526,7 +526,7 @@ void animate_shape_server(void *arg) {
                         if (m_old < 0) m_old = 0;
                         if (m_old >= monitor_count) m_old = monitor_count - 1;
                         if (!is_position_occupied(&canvas_mutex,
-                                                  prev_x + lx, prev_y + ly,
+                                                  prev_x + col, prev_y + row,
                                                   current_tid)) {
                             send_draw(monitor_socks[m_old], xx_old, yy_old, 'a', sh->color_pair);
                         }
@@ -535,18 +535,18 @@ void animate_shape_server(void *arg) {
             }
 
 
-            for (int ly = 0; ly < rot_h; ly++) {
-                for (int lx = 0; lx < rot_w; lx++) {
-                    if (rotated[ly][lx] != ' ') {
-                        int xx = x_global + lx;
-                        int yy = y_global + ly;
+            for (int row = 0; row < rot_h; row++) {
+                for (int col = 0; col < rot_w; col++) {
+                    if (rotated[row][col] != ' ') {
+                        int xx = x_global + col;
+                        int yy = y_global + row;
                         occupy_position(&canvas_mutex, xx, yy, current_tid);
 
                         int ancho_por_monitor = global_cfg->width / monitor_count;
                         int m_new = xx / ancho_por_monitor;
                         if (m_new < 0) m_new = 0;
                         if (m_new >= monitor_count) m_new = monitor_count - 1;
-                        char c = rotated[ly][lx];
+                        char c = rotated[row][col];
                         send_draw(monitor_socks[m_new], xx, yy, c, sh->color_pair);
                     }
                 }
@@ -579,11 +579,11 @@ void animate_shape_server(void *arg) {
         else custom_napms(50);
     }
     my_mutex_lock(&canvas_mutex);
-    for (int ly = 0; ly < rot_h_prev; ly++) {
-        for (int lx = 0; lx < rot_w_prev; lx++) {
-            if (rotated_prev[ly][lx] != ' ') {
-                int xx = prev_x + lx;
-                int yy = prev_y + ly;
+    for (int row = 0; row < rot_h_prev; row++) {
+        for (int col = 0; col < rot_w_prev; col++) {
+            if (rotated_prev[row][col] != ' ') {
+                int xx = prev_x + col;
+                int yy = prev_y + row;
                 free_position(&canvas_mutex, xx, yy, current_tid);
 
                 int ancho_por_monitor = global_cfg->width / monitor_count;
@@ -591,7 +591,7 @@ void animate_shape_server(void *arg) {
                 if (m_fin < 0) m_fin = 0;
                 if (m_fin >= monitor_count) m_fin = monitor_count - 1;
                 if (!is_position_occupied(&canvas_mutex,
-                                          prev_x + lx, prev_y + ly,
+                                          prev_x + col, prev_y + row,
                                           current_tid)) {
 
                     send_draw(monitor_socks[m_fin], xx, yy, 'a', sh->color_pair);
